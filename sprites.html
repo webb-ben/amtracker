@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Train Sprite Sheet</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 20px;
+        background: #0d1220;
+        color: #d8dde8;
+        font:
+          13px/1.4 ui-monospace,
+          Menlo,
+          monospace;
+      }
+      h1 {
+        font-weight: 400;
+        font-size: 22px;
+      }
+      h2 {
+        font-weight: 400;
+        font-size: 14px;
+        margin: 22px 0 8px;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+        align-items: end;
+      }
+      figure {
+        margin: 0;
+        text-align: center;
+      }
+      figure img {
+        image-rendering: pixelated;
+        display: block;
+        margin: 0 auto 6px;
+      }
+      .live {
+        margin-top: 28px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Train Sprite Sheet</h1>
+    <div id="sheet"></div>
+    <script type="module">
+      import { buildSprites } from "./src/sprites.js";
+      const sprites = buildSprites();
+      const sheet = document.getElementById("sheet");
+      const section = (title, items) => {
+        sheet.insertAdjacentHTML("beforeend", `<h2>${title}</h2>`);
+        const row = document.createElement("div");
+        row.className = "row";
+        for (const [key, caption, zoom] of items) {
+          const c = sprites[key];
+          row.insertAdjacentHTML("beforeend", `<figure><img src="${c.toDataURL()}" width="${c.width * zoom}"><figcaption>${caption}</figcaption></figure>`);
+        }
+        sheet.append(row);
+      };
+      section("Locomotive + 2 Cars (Side View)", [
+        ["side-idle", "stopped", 0.8],
+        ["side-move", "moving", 0.8],
+      ]);
+      section("Map Vehicles (Top View)", [
+        ["loco-move", "loco · moving", 1],
+        ["loco-idle", "loco · stopped", 1],
+        ["car-move", "car", 1],
+        ["car-tail-move", "last car", 1],
+      ]);
+    </script>
+  </body>
+</html>

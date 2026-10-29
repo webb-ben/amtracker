@@ -1,0 +1,195 @@
+// Pixel-art train sprite sheet, drawn from character grids so it needs no image assets.
+// Each sprite is a grid of palette keys; "." is transparent.
+
+export const SCALE = 3; // device pixels per art pixel
+
+const PALETTE = {
+  k: "#141a28", // outline
+  w: "#e9edf3", // body white
+  g: "#b4bcc9", // roof gray
+  d: "#5a6273", // dark gray
+  b: "#2f5bc4", // livery blue
+  n: "#1a2c6b", // navy skirt
+  c: "#86c3ee", // window glass
+  Y: "#ffd84d", // headlight on
+  y: "#8a7a3a", // headlight off
+  R: "#ff4a3d", // tail light on
+  r: "#6b2a26", // tail light off
+  s: "#9aa3b2", // rail steel
+  a: "#ffd84d", // direction arrow
+  e: "#fff1a8", // headlight beam
+  f: "#b9a75c", // beam falloff
+  m: "#7f8db8", // speed streaks
+};
+
+// ---- Top view (nose pointing up / north) ----------------------------------
+
+const LOCO_TOP = [
+  "...kkkkkk...",
+  "..kbLbbLbk..",
+  ".kbccccccbk.",
+  ".kbccccccbk.",
+  "kbbbbbbbbbbk",
+  "kwwwwwwwwwwk",
+  "kbwggggggwbk",
+  "kbwgddddgwbk",
+  "kbwgdkkdgwbk",
+  "kbwgddddgwbk",
+  "kbwggggggwbk",
+  "kbwggggggwbk",
+  "kbwgddddgwbk",
+  "kbwgddddgwbk",
+  "kbwggggggwbk",
+  "kbwggggggwbk",
+  "kbwgdkkdgwbk",
+  "kbwgddddgwbk",
+  "kbwggggggwbk",
+  "kbwwwwwwwwbk",
+  "kbbbbbbbbbbk",
+  ".kbnnnnnnbk.",
+  "..kkkkkkkk..",
+  ".....kk.....",
+];
+
+const CAR_TOP = [
+  ".kkkkkkkkkk.",
+  "kbbbbbbbbbbk",
+  "kbggggggggbk",
+  "kbgddddddgbk",
+  "kbggggggggbk",
+  "kbggggggggbk",
+  "kbggggggggbk",
+  "kbgddddddgbk",
+  "kbggggggggbk",
+  "kbggggggggbk",
+  "kbggggggggbk",
+  "kbgddddddgbk",
+  "kbggggggggbk",
+  "kbggggggggbk",
+  "kbggggggggbk",
+  "kbgddddddgbk",
+  "kbggggggggbk",
+  "kbbbbbbbbbbk",
+  "kbTbbbbbbTbk",
+  ".kkkkkkkkkk.",
+];
+
+// ---- Side view (nose pointing right) ---------------------------------------
+
+const LOCO_SIDE = [
+  "..kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk....",
+  ".kggggggggggggggggggggggggggggggggggk...",
+  "kgwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwk..",
+  "kwccwccwccwwwwwwwwwwwwwwwwwwwwwwwwcccck.",
+  "kwccwccwccwwwwwwwwwwwwwwwwwwwwwwwwcccck.",
+  "kbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbk",
+  "kwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwLk",
+  "kbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbk",
+  "knnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnk",
+  "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+  "..kdddk..kdddk..........kdddk..kdddk....",
+  ".kdAdBdkkdAdBdk........kdAdBdkkdAdBdk...",
+  "..kdddk..kdddk..........kdddk..kdddk....",
+  "ssssssssssssssssssssssssssssssssssssssss",
+];
+
+const CAR_SIDE = [
+  ".kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk.",
+  "kgggggggggggggggggggggggggggggggggggggk",
+  "kbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbk",
+  "kbccbccbccbccbccbccbccbccbccbccbccbccbk",
+  "kbccbccbccbccbccbccbccbccbccbccbccbccbk",
+  "kbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbk",
+  "kwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwk",
+  "kbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbk",
+  "knnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnk",
+  "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+  "..kdddk..kdddk...........kdddk..kdddk..",
+  ".kdAdBdkkdAdBdk.........kdAdBdkkdAdBdk.",
+  "..kdddk..kdddk...........kdddk..kdddk..",
+  "sssssssssssssssssssssssssssssssssssssss",
+];
+
+// Direction arrow drawn ahead of the nose on the map sprite.
+const ARROW = [".....kk.....", "....kaak....", "...kaaaak...", "..kaakkaak..", ".kaak..kaak.", ".kkk....kkk.", "............"];
+
+// Two static states. Placeholders: L = headlight, T = tail light, A/B = wheel hubs.
+const STATES = {
+  idle: { L: "y", T: "r", A: "d", B: "d" },
+  move: { L: "Y", T: "R", A: "d", B: "d" },
+};
+
+function applyState(rows, f) {
+  return rows.map((row) => row.replace(/[LTAB]/g, (ch) => f[ch]));
+}
+
+function rasterize(rows, scale = SCALE) {
+  const h = rows.length;
+  const w = Math.max(...rows.map((r) => r.length));
+  const canvas = document.createElement("canvas");
+  canvas.width = w * scale;
+  canvas.height = h * scale;
+  const ctx = canvas.getContext("2d");
+  rows.forEach((row, y) => {
+    for (let x = 0; x < row.length; x++) {
+      const color = PALETTE[row[x]];
+      if (!color) continue;
+      ctx.fillStyle = color;
+      ctx.fillRect(x * scale, y * scale, scale, scale);
+    }
+  });
+  return canvas;
+}
+
+export const CARS = 2; // passenger cars in the side view
+
+// Map sprites are drawn one vehicle at a time so each can sit on the track at its own bearing.
+// Lengths are in art pixels (rows of the top-view grids), measured from the locomotive's nose.
+export const VEHICLE = {
+  locoCenter: (LOCO_TOP.length - ARROW.length) / 2, // loco image includes the arrow ahead of the nose
+  locoLength: LOCO_TOP.length,
+  carLength: CAR_TOP.length,
+  gap: 1,
+};
+
+// Moving side views get speed streaks behind and a headlight beam ahead; stopped ones are
+// padded to the same width so the two swap without the image jumping.
+const STREAKS = { 2: "..mmmm..", 4: "mmmmmm..", 6: ".mmm.mm.", 8: "...mmm.." };
+const BEAM = { 5: "ef..", 6: "eeef", 7: "ef.." };
+
+function sideRows(state) {
+  const f = STATES[state];
+  const moving = state === "move";
+  // side view: cars trail behind (to the left of) the loco
+  const loco = applyState(LOCO_SIDE, f);
+  const car = applyState(CAR_SIDE, f);
+  const rail = (n) => "s".repeat(n);
+  return loco.map((row, y) => {
+    const isRail = y === loco.length - 1;
+    const before = isRail ? rail(8) : (moving && STREAKS[y]) || "........";
+    const after = isRail ? rail(4) : (moving && BEAM[y]) || "....";
+    return before + Array(CARS).fill(car[y]).join(".") + "." + row + after;
+  });
+}
+
+// Returns canvases keyed "side-<state>", "loco-<state>", "car-<state>", "car-tail-<state>".
+export function buildSprites(scale = SCALE) {
+  const sprites = {};
+  for (const [state, f] of Object.entries(STATES)) {
+    sprites[`side-${state}`] = rasterize(sideRows(state), scale);
+    sprites[`loco-${state}`] = rasterize([...ARROW, ...applyState(LOCO_TOP, f)], scale);
+    // Only the last car shows tail lights.
+    sprites[`car-${state}`] = rasterize(applyState(CAR_TOP, { ...f, T: "b" }), scale);
+    sprites[`car-tail-${state}`] = rasterize(applyState(CAR_TOP, f), scale);
+  }
+  return sprites;
+}
+
+export function spriteImageData(canvas) {
+  return canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+}
+
+// Direction arrow alone, used as the train head at low zoom.
+export function buildArrow(scale = SCALE) {
+  return rasterize(ARROW.slice(0, -1), scale);
+}
