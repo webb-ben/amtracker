@@ -274,11 +274,9 @@ h1 {
   text-align: center;
 }
 /* The tag has its own row, so the station roof and sign below can never run into it. The
-   station stands ~23 px above the train and its sign ~19 px above that (at the 300 px max). */
+   station stands ~23 px above the train and its sign ~19 px above that (at the 300 px max);
+   that space is always reserved so the view keeps one height whether or not a station shows. */
 .sprite-stage .train-wrap {
-  margin-top: 6px;
-}
-.sprite-stage.at-station .train-wrap {
   margin-top: 48px;
 }
 .train-wrap {
@@ -382,19 +380,35 @@ h1 {
 .slide-in {
   animation: slide-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+/* The station building and its sign arrive together, gliding in from the left like a platform
+   coming into view; both keep their centring transform. */
+.train-wrap .station.slide-in,
 .station-sign.slide-in {
-  animation-name: slide-in-sign; /* keeps the sign's centring transform */
+  animation-duration: 1.1s;
+  animation-timing-function: cubic-bezier(0.15, 0.7, 0.25, 1);
+}
+.train-wrap .station.slide-in {
+  animation-name: station-arrive;
+}
+.station-sign.slide-in {
+  animation-name: station-sign-arrive;
+}
+@keyframes station-arrive {
+  from {
+    opacity: 0;
+    transform: translateX(calc(-50% - 160px));
+  }
+}
+@keyframes station-sign-arrive {
+  from {
+    opacity: 0;
+    transform: translate(calc(-50% - 160px), -3px);
+  }
 }
 @keyframes slide-in {
   from {
     opacity: 0;
     transform: translateX(-14px);
-  }
-}
-@keyframes slide-in-sign {
-  from {
-    opacity: 0;
-    transform: translate(calc(-50% - 14px), -3px);
   }
 }
 @media (prefers-reduced-motion: reduce) {

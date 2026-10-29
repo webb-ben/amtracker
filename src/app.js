@@ -1066,7 +1066,7 @@ function renderDetail() {
 
 // The detail panel is re-rendered every few seconds; slide in (left to right) only the pieces
 // whose text actually changed since the last render of the same train.
-const SLIDE_TARGETS = [".motion-tag", ".station-sign", ".stage-stops .last", ".stage-stops .upcoming", ".facts dd"];
+const SLIDE_TARGETS = [".motion-tag", ".train-wrap .station", ".station-sign", ".stage-stops .last", ".stage-stops .upcoming", ".facts dd"];
 let lastShown = { id: null, texts: [] };
 
 function slideInChanges(id) {
