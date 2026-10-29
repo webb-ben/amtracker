@@ -20,11 +20,22 @@ const SPEED_RAMP = [
 ];
 
 const AMTRAK_RED = "#c8102e";
+const STALE_MIN = 10; // a position fix older than this many minutes is flagged as stale
+const STALE_OPACITY = ["case", ["get", "stale"], 0.45, 1]; // stale trains are faded on the map
+const ARRIVING_M = 1500; // a moving train this close to its next stop is "now arriving"
 const NUMBER_ZOOM = 11; // from here the train number is painted on the first car instead of labelled beside it
 const NUMBER_SIZE = [NUMBER_ZOOM, 10, 12, 12, 15, 21]; // [zoom, text size, …] for the painted number
 const LANES = [0, 1, -1, 2, -2, 3, -3]; // tried in order when trains overlap
-const LANE_ICON_PX = 22; // lane spacing for sprites, in icon pixels (scaled by icon-size); a car is 18 wide
-const LANE_TRAIL_PX = 8; // lane spacing for low-zoom track slices, in screen pixels
+// Trains alone on their stretch of track are drawn full width; trains that would overlap
+// ("crowded") switch to narrow sprites and thinner trails so lanes can pack closer together.
+const CAR_PX = { full: 18, narrow: 12 }; // drawn car width in icon pixels (12 or 8 art px × 1.5)
+const LANE_ICON_PX = 14; // lane spacing for narrow sprites, in icon pixels (scaled by icon-size)
+const TRAIL_PX_WIDTH = { full: 7, narrow: 4 }; // low-zoom trail casing width
+const LANE_TRAIL_PX = 5; // lane spacing for narrow low-zoom trails, in screen pixels
+const NARROW_TEXT = 0.75; // painted-number size on narrow cars, relative to full width
+const CROSSOVER_MS = 900; // time for one vehicle to move across to its new lane
+const CROSSOVER_STAGGER_MS = 220; // each following vehicle starts this much later
+const MAX_VEHICLES = 8; // loco + up to six cars (+ slack), bounds how long a crossover can run
 const HEAD_ICON_SIZE = 0.55; // icon-size of the low-zoom direction arrow
 
 const HEADING_DEG = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
@@ -39,14 +50,20 @@ const spriteUrls = Object.fromEntries(Object.entries(sprites).map(([k, c]) => [k
 // 10 mph band) and stack more chevrons as it speeds up; a stopped train gets a flat grey bar.
 const ARROW_STEP = 10;
 const CHEVRON_MPH = [40, 70]; // a second chevron from 40 mph, a third from 70
-const arrows = { "arrow-stopped": buildArrow("#9aa3b2", 0) };
-for (let mph = 0; mph <= SPEED_RAMP.at(-1)[0]; mph += ARROW_STEP) {
-  arrows[`arrow-${mph}`] = buildArrow(speedColor(mph), 1 + CHEVRON_MPH.filter((m) => mph >= m).length);
+// Each also has a "-narrow" variant for trains drawn side by side.
+const arrows = {};
+for (const thin of [false, true]) {
+  const suffix = thin ? "-narrow" : "";
+  arrows[`arrow-stopped${suffix}`] = buildArrow("#9aa3b2", 0, { thin });
+  for (let mph = 0; mph <= SPEED_RAMP.at(-1)[0]; mph += ARROW_STEP) {
+    arrows[`arrow-${mph}${suffix}`] = buildArrow(speedColor(mph), 1 + CHEVRON_MPH.filter((m) => mph >= m).length, { thin });
+  }
 }
 
+// Parked at a station: nothing in front of the train. Stopped elsewhere: a flat bar.
 function arrowImage(t) {
   const mph = t.velocity ?? 0;
-  if (mph <= 1) return "arrow-stopped";
+  if (mph <= 1) return stopContext(t, false).at ? null : "arrow-stopped";
   return `arrow-${Math.min(SPEED_RAMP.at(-1)[0], Math.round(mph / ARROW_STEP) * ARROW_STEP)}`;
 }
 
@@ -79,6 +96,9 @@ const state = {
   trainShapes: {}, // train number -> shape id
   shapeCoords: new Map(), // shape id -> [lon, lat][]
   plans: new Map(), // trainID -> dead-reckoning plan, rebuilt on every refresh
+  lanes: new Map(), // trainID -> lane it was drawn in last frame, so lanes stick
+  laneAnims: new Map(), // trainID -> { from, to, start } crossover between lanes
+  crossing: false, // any crossover in progress (animate every frame)
   loaded: false, // first successful fetch applies ?train= / ?station=
   speed: null, // 30-day speed heatmap, fetched the first time it's switched on
   showSpeed: false,
@@ -222,7 +242,12 @@ function addOverlays() {
     source: "train-trails",
     maxzoom: SPRITE_ZOOM,
     layout: { "line-cap": "round", "line-join": "round" },
-    paint: { "line-color": "#141a28", "line-width": ["case", ["get", "selected"], 9, 7], "line-offset": ["get", "lineOffset"] },
+    paint: {
+      "line-color": "#141a28",
+      "line-width": ["+", ["get", "trailWidth"], ["case", ["get", "selected"], 2, 0]],
+      "line-offset": ["get", "lineOffset"],
+      "line-opacity": STALE_OPACITY,
+    },
   });
   map.addLayer({
     id: "train-trail",
@@ -230,7 +255,12 @@ function addOverlays() {
     source: "train-trails",
     maxzoom: SPRITE_ZOOM,
     layout: { "line-cap": "round", "line-join": "round" },
-    paint: { "line-color": "#2f5bc4", "line-width": ["case", ["get", "selected"], 6, 4.5], "line-offset": ["get", "lineOffset"] },
+    paint: {
+      "line-color": "#2f5bc4",
+      "line-width": ["+", ["*", ["get", "trailWidth"], 0.65], ["case", ["get", "selected"], 1.5, 0]],
+      "line-offset": ["get", "lineOffset"],
+      "line-opacity": STALE_OPACITY,
+    },
   });
   map.addLayer({
     id: "train-trail-stripe",
@@ -238,7 +268,7 @@ function addOverlays() {
     source: "train-trails",
     maxzoom: SPRITE_ZOOM,
     layout: { "line-cap": "butt", "line-join": "round" },
-    paint: { "line-color": "#e9edf3", "line-width": 1.2, "line-offset": ["get", "lineOffset"] },
+    paint: { "line-color": "#e9edf3", "line-width": ["*", ["get", "trailWidth"], 0.17], "line-offset": ["get", "lineOffset"], "line-opacity": STALE_OPACITY },
   });
   map.addLayer({
     id: "train-heads",
@@ -246,7 +276,7 @@ function addOverlays() {
     source: "trains",
     maxzoom: SPRITE_ZOOM,
     layout: {
-      "icon-image": ["get", "arrow"],
+      "icon-image": ["coalesce", ["get", "arrow"], ""], // no arrow while parked at a station
       "icon-rotate": ["get", "bearing"],
       "icon-rotation-alignment": "map",
       "icon-size": HEAD_ICON_SIZE,
@@ -265,6 +295,7 @@ function addOverlays() {
       "text-color": ["get", "textColor"],
       "text-halo-color": ["get", "iconColor"],
       "text-halo-width": 3,
+      "icon-opacity": STALE_OPACITY,
     },
   });
   // Zoomed in: one sprite per vehicle, each placed on the track at its own bearing.
@@ -284,6 +315,7 @@ function addOverlays() {
       "symbol-sort-key": ["case", ["get", "selected"], 1, 0],
       "symbol-z-order": "source",
     },
+    paint: { "icon-opacity": STALE_OPACITY },
   });
   // Train number painted on the first car in Amtrak red, once the cars are big enough to hold it.
   // The font server has no bold weight, so a white-outlined copy sits under a copy whose red halo
@@ -291,7 +323,13 @@ function addOverlays() {
   const numberLayout = {
     "text-field": ["get", "trainNum"],
     "text-font": ["Noto Sans Medium"],
-    "text-size": ["interpolate", ["linear"], ["zoom"], ...NUMBER_SIZE],
+    // Smaller on narrow (crowded) cars so the number still fits across them.
+    "text-size": [
+      "interpolate",
+      ["linear"],
+      ["zoom"],
+      ...[0, 2, 4].flatMap((i) => [NUMBER_SIZE[i], ["case", ["get", "crowded"], NUMBER_SIZE[i + 1] * NARROW_TEXT, NUMBER_SIZE[i + 1]]]),
+    ],
     "text-rotate": ["get", "textRotate"],
     "text-rotation-alignment": "map",
     "text-offset": ["get", "textOffset"],
@@ -307,8 +345,10 @@ function addOverlays() {
     layout: numberLayout,
     paint,
   });
-  map.addLayer(numberLayer("train-numbers-outline", { "text-color": AMTRAK_RED, "text-halo-color": "rgba(255,255,255,0.9)", "text-halo-width": 1.6 }));
-  map.addLayer(numberLayer("train-numbers", { "text-color": AMTRAK_RED, "text-halo-color": AMTRAK_RED, "text-halo-width": 0.6 }));
+  map.addLayer(
+    numberLayer("train-numbers-outline", { "text-color": AMTRAK_RED, "text-halo-color": "rgba(255,255,255,0.9)", "text-halo-width": 1.6, "text-opacity": STALE_OPACITY }),
+  );
+  map.addLayer(numberLayer("train-numbers", { "text-color": AMTRAK_RED, "text-halo-color": AMTRAK_RED, "text-halo-width": 0.6, "text-opacity": STALE_OPACITY }));
   // Train number label beside the train, until it's painted on the first car instead.
   map.addLayer({
     id: "trains",
@@ -403,13 +443,64 @@ function shapeFor(t) {
 }
 
 function buildPlans() {
-  state.plans = new Map(
-    state.trains.map((t) => {
-      const next = nextStop(t);
-      const st = next && state.stations[next.code];
-      return [t.trainID, planMotion(t, shapeFor(t), st && Number.isFinite(st.lat) ? st : undefined, HEADING_DEG[t.heading])];
-    }),
-  );
+  state.plans = new Map(state.trains.map((t) => [t.trainID, planFor(t, shapeFor(t))]));
+}
+
+function planFor(t, coords) {
+  const next = nextStop(t);
+  const st = next && state.stations[next.code];
+  return planMotion(t, coords, st && Number.isFinite(st.lat) ? st : undefined, HEADING_DEG[t.heading]);
+}
+
+// Some GTFS shapes skip past a station the train actually uses (Keystone and Pennsylvanian
+// shapes cut across the wye ~2 km from Philadelphia 30th Street, where those trains reverse),
+// so a train standing there is too far from its shape and falls back to a straight compass
+// line. For those, borrow the nearest Overture rail line drawn under the train as a local
+// track, so its cars sit along the real platform track. Needs the rail layers on screen
+// (zoom ≥ 8); runs when the map goes idle and keeps the result until the next refresh.
+const RAIL_LAYERS = ["rail-freight", "rail-passenger"];
+const SNAP_PX = 40;
+
+function snapFreePlansToRail() {
+  if (map.getZoom() < SPRITE_ZOOM || !RAIL_LAYERS.every((id) => map.getLayer(id))) return;
+  const bounds = map.getBounds();
+  let changed = false;
+  for (const t of state.trains) {
+    const plan = state.plans.get(t.trainID);
+    if (plan?.kind !== "free" || plan.snapTried || !bounds.contains([t.lon, t.lat])) continue;
+    plan.snapTried = true;
+    const coords = nearestRail(t);
+    if (!coords) continue;
+    const local = planFor(t, coords);
+    if (local.kind === "track") {
+      state.plans.set(t.trainID, local);
+      changed = true;
+    }
+  }
+  if (changed) updateTrains();
+}
+
+function nearestRail(t) {
+  const p = map.project([t.lon, t.lat]);
+  const box = [
+    [p.x - SNAP_PX, p.y - SNAP_PX],
+    [p.x + SNAP_PX, p.y + SNAP_PX],
+  ];
+  let best = { dist: SNAP_PX, coords: null };
+  for (const f of map.queryRenderedFeatures(box, { layers: RAIL_LAYERS })) {
+    const lines = f.geometry.type === "LineString" ? [f.geometry.coordinates] : f.geometry.type === "MultiLineString" ? f.geometry.coordinates : [];
+    for (const line of lines) {
+      const screen = line.map((c) => {
+        const s = map.project(c);
+        return [s.x, s.y];
+      });
+      for (let i = 0; i < screen.length - 1; i++) {
+        const d = segmentDistance([p.x, p.y], [p.x, p.y], screen[i], screen[i + 1]);
+        if (d < best.dist) best = { dist: d, coords: line };
+      }
+    }
+  }
+  return best.coords;
 }
 
 function trainPosition(t, now = Date.now()) {
@@ -440,17 +531,23 @@ function numberSizeAt(zoom) {
 // meters back from the nose so the consist follows curves. `lane` shifts every vehicle sideways
 // (to the right of travel for positive lanes) so trains sharing a line look like they're on
 // parallel tracks; each vehicle shifts along its own bearing, so the shifted train still bends.
-function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, lane) {
+// `laneAt(k)` gives the (possibly mid-crossover) lane of the k-th vehicle from the front.
+function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneAt) {
   const cars = carsAt(zoom);
   const metersPerArtPx = (SCALE / (SCALE / 1.5)) * iconSizeAt(zoom) * metersPerPx;
-  const lateralEm = (lane * LANE_ICON_PX * iconSizeAt(zoom)) / numberSizeAt(zoom);
-  const state = properties.moving ? "move" : "idle";
+  const numberSize = numberSizeAt(zoom) * (properties.crowded ? NARROW_TEXT : 1);
+  const suffix = properties.crowded ? "-narrow" : "";
+  const state = (properties.moving ? "move" : "idle") + suffix;
   const out = [];
-  const place = (image, rowsBehind, extra = {}) => {
+  const place = (image, rowsBehind, extra = {}, k = 0) => {
+    const lane = laneAt(k);
+    const lateralEm = (lane * LANE_ICON_PX * iconSizeAt(zoom)) / numberSize;
     const p = plan ? positionAt(plan, now, rowsBehind * metersPerArtPx) : trainPosition(t, now);
-    // The number runs along the car, turned so it never reads upside down; its offset follows
-    // the text's own axes, which point to the left of travel when the text is flipped.
-    const flipped = p.bearing > 180;
+    // The number runs along the car, turned so it never reads upside down. Near-vertical text
+    // always reads bottom-to-top (flip window is 160–340°, not 180–360°) so a number like 89
+    // can't wobble between orientations and read as 68. Its offset follows the text's own
+    // axes, which point to the left of travel when the text is flipped.
+    const flipped = p.bearing >= 160 && p.bearing < 340;
     const textRotate = flipped ? p.bearing + 90 : p.bearing - 90;
     out.push({
       type: "Feature",
@@ -458,45 +555,127 @@ function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, lane) {
       properties: { ...properties, ...extra, image, bearing: p.bearing, textRotate, offset: [lane * LANE_ICON_PX, 0], textOffset: [0, flipped ? -lateralEm : lateralEm] },
     });
   };
-  place(properties.arrow, VEHICLE.arrowCenter);
+  if (properties.arrow) place(properties.arrow + suffix, VEHICLE.arrowCenter);
   place(`loco-${state}`, VEHICLE.locoCenter);
   for (let i = 0; i < cars; i++) {
     const center = VEHICLE.locoLength + i * (VEHICLE.carLength + VEHICLE.gap) + VEHICLE.carLength / 2;
-    place(i === cars - 1 ? `car-tail-${state}` : `car-${state}`, center, { numbered: i === 0 });
+    place(i === cars - 1 ? `car-tail-${state}` : `car-${state}`, center, { numbered: i === 0 }, i + 1);
   }
   return out;
 }
 
-// Give overlapping trains different lanes. Works in screen space on each train's head-to-tail
-// segment, so it adapts to zoom; trains are taken in a fixed order (selected first, then by ID)
-// so lanes stay stable from frame to frame.
+// Lane changes play out like a crossover: the loco swings across first and each car follows a
+// beat later, easing over CROSSOVER_MS. Returns laneAt(k) for vehicle k (0 = loco) and whether
+// the crossover is still in progress.
+function laneTransition(id, lane, now) {
+  let anim = state.laneAnims.get(id);
+  if (!anim) {
+    anim = { from: lane, to: lane, start: 0 };
+  } else if (anim.to !== lane) {
+    // Start from wherever the front of the train currently is, so a reversal mid-crossover is smooth.
+    anim = { from: laneProgress(anim, now, 0), to: lane, start: now };
+  }
+  state.laneAnims.set(id, anim);
+  const active = anim.from !== anim.to && now - anim.start < CROSSOVER_MS + CROSSOVER_STAGGER_MS * MAX_VEHICLES;
+  return { laneAt: (k) => laneProgress(anim, now, k), active };
+}
+
+function laneProgress(anim, now, k) {
+  const u = Math.min(1, Math.max(0, (now - anim.start - k * CROSSOVER_STAGGER_MS) / CROSSOVER_MS));
+  const eased = u * u * (3 - 2 * u); // smoothstep
+  return anim.from + (anim.to - anim.from) * eased;
+}
+
+// Give overlapping trains different lanes. Works in screen space on each train's drawn path
+// (a polyline through its cars, head first), so curved trains whose tails swing across a
+// neighbour are caught, and it adapts to zoom.
+//
+// First, any train that would touch another at full width is marked crowded; crowded trains
+// are drawn narrow and packed into closer lanes, while a train alone on its stretch keeps full
+// width on the centre track.
+//
+// Lanes are sticky: trains already holding a lane are placed before newcomers, so an arriving
+// train goes around a waiting one instead of shoving it aside. Incumbents on the centre track
+// go first and keep it; incumbents in a side lane try the centre again (to drift back once it
+// clears), then their old lane. Within each group moving trains go first, then the selected
+// train, then by ID.
 function assignLanes(entries, zoom) {
   const sprite = zoom >= SPRITE_ZOOM;
-  const width = sprite ? 18 * iconSizeAt(zoom) : 7; // drawn train width in px
-  const spacing = sprite ? LANE_ICON_PX * iconSizeAt(zoom) : LANE_TRAIL_PX;
-  const rotation = map.getBearing();
-  const placed = [];
-  entries.sort((a, b) => b.selected - a.selected || a.t.trainID.localeCompare(b.t.trainID));
+  const scale = sprite ? iconSizeAt(zoom) : 1;
+  const widthOf = (crowded) => (sprite ? CAR_PX[crowded ? "narrow" : "full"] * scale : TRAIL_PX_WIDTH[crowded ? "narrow" : "full"]);
+  const spacing = sprite ? LANE_ICON_PX * scale : LANE_TRAIL_PX;
+
+  const full = widthOf(false);
   for (const e of entries) {
-    const rad = ((e.pos.bearing - rotation) * Math.PI) / 180;
-    const right = [Math.cos(rad), Math.sin(rad)]; // screen y points down
-    const shifted = (lane) => e.seg.map(([x, y]) => [x + right[0] * lane * spacing, y + right[1] * lane * spacing]);
-    for (const lane of LANES) {
-      const seg = shifted(lane);
-      if (placed.every((o) => segmentDistance(seg, o.seg) >= width)) {
+    e.crowded = false;
+    const xs = e.path.map((p) => p[0]);
+    const ys = e.path.map((p) => p[1]);
+    e.box = [Math.min(...xs) - full, Math.min(...ys) - full, Math.max(...xs) + full, Math.max(...ys) + full];
+  }
+  for (let i = 0; i < entries.length; i++) {
+    for (let j = i + 1; j < entries.length; j++) {
+      const [a, b] = [entries[i], entries[j]];
+      if (a.box[0] > b.box[2] || b.box[0] > a.box[2] || a.box[1] > b.box[3] || b.box[1] > a.box[3]) continue;
+      if (polylineDistance(a.path, b.path) < full) a.crowded = b.crowded = true;
+    }
+  }
+
+  const previous = state.lanes;
+  const group = (e) => (!previous.has(e.t.trainID) ? 2 : previous.get(e.t.trainID) === 0 ? 0 : 1);
+  entries.sort(
+    (a, b) => group(a) - group(b) || b.properties.moving - a.properties.moving || b.properties.selected - a.properties.selected || a.t.trainID.localeCompare(b.t.trainID),
+  );
+  const placed = [];
+  state.lanes = new Map();
+  for (const e of entries) {
+    const width = widthOf(e.crowded);
+    const normals = rightNormals(e.path);
+    const prior = previous.get(e.t.trainID);
+    const order = !e.crowded ? [0] : prior === undefined ? LANES : [0, prior, ...LANES.filter((l) => l !== 0 && l !== prior)];
+    e.lane = e.crowded ? (prior ?? 0) : 0;
+    let path = e.path;
+    for (const lane of order) {
+      const shifted = e.path.map(([x, y], i) => [x + normals[i][0] * lane * spacing, y + normals[i][1] * lane * spacing]);
+      // Clearance is centre to centre: half of each train's drawn width.
+      if (placed.every((other) => polylineDistance(shifted, other.path) >= (width + other.width) / 2)) {
         e.lane = lane;
-        placed.push({ seg });
+        path = shifted;
         break;
       }
     }
-    if (e.lane === undefined) {
-      e.lane = 0;
-      placed.push({ seg: e.seg });
-    }
+    placed.push({ path, width });
+    state.lanes.set(e.t.trainID, e.lane);
   }
 }
 
-function segmentDistance([a, b], [c, d]) {
+// Unit normal pointing to the right of travel at each point of a head-first screen polyline
+// (screen y points down, so "right" of a direction (dx, dy) is (-dy, dx)). Neighbours are
+// searched outward past coincident points so a bunched tail still gets a direction.
+function rightNormals(path) {
+  let last = [0, 0];
+  return path.map((p, i) => {
+    let lo = i;
+    let hi = i;
+    while (lo > 0 && Math.hypot(path[lo][0] - p[0], path[lo][1] - p[1]) < 0.5) lo--;
+    while (hi < path.length - 1 && Math.hypot(path[hi][0] - p[0], path[hi][1] - p[1]) < 0.5) hi++;
+    const [hx, hy] = path[lo]; // toward the head
+    const [tx, ty] = path[hi];
+    const len = Math.hypot(hx - tx, hy - ty);
+    if (len < 0.5) return last;
+    last = [-(hy - ty) / len, (hx - tx) / len];
+    return last;
+  });
+}
+
+function polylineDistance(a, b) {
+  let best = Infinity;
+  for (let i = 0; i < a.length - 1; i++) for (let j = 0; j < b.length - 1; j++) best = Math.min(best, segmentDistance(a[i], a[i + 1], b[j], b[j + 1]));
+  return best;
+}
+
+function segmentDistance(a, b, c, d) {
+  const cross = (o, p, q) => (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+  if (cross(a, b, c) * cross(a, b, d) < 0 && cross(c, d, a) * cross(c, d, b) < 0) return 0; // they cross
   const pointSeg = ([px, py], [ax, ay], [bx, by]) => {
     const dx = bx - ax;
     const dy = by - ay;
@@ -531,6 +710,7 @@ function trainFeatures() {
       moving: (t.velocity ?? 0) > 1,
       selected: t.trainID === state.selectedId,
       arrow: arrowImage(t),
+      stale: (now - Date.parse(t.lastValTS)) / 60_000 >= STALE_MIN,
     };
     const point = { type: "Feature", geometry: { type: "Point", coordinates: [pos.lon, pos.lat] }, properties };
     points.push(point);
@@ -538,26 +718,40 @@ function trainFeatures() {
     const plan = state.plans.get(t.trainID);
     const metersPerPx = (78271.517 * Math.cos((pos.lat * Math.PI) / 180)) / 2 ** zoom;
     const lengthM = zoom >= SPRITE_ZOOM ? (VEHICLE.locoLength + carsAt(zoom) * (VEHICLE.carLength + VEHICLE.gap)) * 1.5 * iconSizeAt(zoom) * metersPerPx : TRAIL_PX * metersPerPx;
-    const tail = plan ? positionAt(plan, now, lengthM) : pos;
-    const seg = [map.project([pos.lon, pos.lat]), map.project([tail.lon, tail.lat])].map((p) => [p.x, p.y]);
-    entries.push({ t, pos, plan, metersPerPx, properties, point, seg, selected: properties.selected });
+    // Sample the drawn train head to tail (about one point per car) so the lane check sees curves.
+    const samples = zoom >= SPRITE_ZOOM ? carsAt(zoom) + 2 : 4;
+    const path = Array.from({ length: samples }, (_, i) => {
+      const p = plan ? positionAt(plan, now, (lengthM * i) / (samples - 1)) : pos;
+      const s = map.project([p.lon, p.lat]);
+      return [s.x, s.y];
+    });
+    entries.push({ t, pos, plan, metersPerPx, properties, point, path });
   }
   assignLanes(entries, zoom);
 
-  for (const { t, plan, metersPerPx, properties, point, lane } of entries) {
-    point.properties = { ...properties, headOffset: [(lane * LANE_TRAIL_PX) / HEAD_ICON_SIZE, 0] };
-    if (zoom >= SPRITE_ZOOM) vehicles.push(...vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, lane));
+  let crossing = false;
+  for (const e of entries) {
+    const { t, plan, metersPerPx, point, lane, crowded } = e;
+    const { laneAt, active } = laneTransition(t.trainID, lane, now);
+    crossing ||= active;
+    const head = laneAt(0);
+    const properties = { ...e.properties, crowded };
+    const arrow = properties.arrow && crowded ? `${properties.arrow}-narrow` : properties.arrow;
+    point.properties = { ...properties, arrow, headOffset: [(head * LANE_TRAIL_PX) / HEAD_ICON_SIZE, 0] };
+    if (zoom >= SPRITE_ZOOM) vehicles.push(...vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneAt));
     else if (plan) {
       const coords = trailAt(plan, now, TRAIL_PX * metersPerPx);
-      trails.push({ type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: { ...properties, lineOffset: lane * LANE_TRAIL_PX } });
+      const trailWidth = TRAIL_PX_WIDTH[crowded ? "narrow" : "full"];
+      trails.push({ type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: { ...properties, lineOffset: head * LANE_TRAIL_PX, trailWidth } });
     }
   }
   const fc = (features) => ({ type: "FeatureCollection", features });
-  return { points: fc(points), trails: fc(trails), vehicles: fc(vehicles) };
+  return { points: fc(points), trails: fc(trails), vehicles: fc(vehicles), crossing };
 }
 
 function updateTrains() {
-  const { points, trails, vehicles } = trainFeatures();
+  const { points, trails, vehicles, crossing } = trainFeatures();
+  state.crossing = crossing; // keep redrawing every frame until crossovers finish
   map.getSource("trains")?.setData(points);
   map.getSource("train-trails")?.setData(trails);
   map.getSource("train-vehicles")?.setData(vehicles);
@@ -622,9 +816,9 @@ const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 let lastMotion = 0;
 let zooming = false;
 function animate(ts) {
-  // Car spacing and trail length depend on zoom, so redraw every frame while zooming;
-  // otherwise they lag behind icon-size and the cars bounce.
-  if (zooming || ts - lastMotion >= (reduceMotion ? 10_000 : MOTION_MS)) {
+  // Car spacing and trail length depend on zoom, so redraw every frame while zooming (otherwise
+  // they lag behind icon-size and the cars bounce), and while any train is crossing lanes.
+  if (zooming || state.crossing || ts - lastMotion >= (reduceMotion ? 10_000 : MOTION_MS)) {
     lastMotion = ts;
     zooming = false;
     updateTrains();
@@ -634,6 +828,11 @@ function animate(ts) {
 requestAnimationFrame(animate);
 map.on("zoom", () => (zooming = true));
 map.on("moveend", () => (lastMotion = 0)); // pick up trains panned into view
+map.on("idle", snapFreePlansToRail);
+
+// The side view depends on the extrapolated position (e.g. "Now arriving"), so refresh it
+// between API updates too.
+setInterval(() => state.selectedId && renderDetail(), 5_000);
 
 // ---------------------------------------------------------------------------
 // Panel
@@ -835,16 +1034,22 @@ function renderDetail() {
   const moving = (t.velocity ?? 0) > 1;
   const status = timeliness(t);
   const next = nextStop(t);
-  const { at, last, upcoming } = stopContext(t, moving);
+  const { at, arriving, last, upcoming } = stopContext(t, moving);
+  const platform = at ?? arriving;
   const side = sprites[`side-${moving ? "move" : "idle"}`];
-  const stationArt = at
+  const stationArt = platform
     ? `<img class="station" src="${spriteUrls.station}" alt="" style="width:${(sprites.station.width / side.width) * 100}%" />
-       <span class="station-sign" style="bottom:${(sprites.station.height / side.height) * 100}%">${esc(at.name)}</span>`
+       <span class="station-sign" style="bottom:${(sprites.station.height / side.height) * 100}%">${esc(platform.name)}</span>`
     : "";
+  // A fix older than STALE_MIN means the speed shown is a last-known value, not live.
+  const fixAge = (Date.now() - Date.parse(t.lastValTS)) / 60_000;
+  const stale = fixAge >= STALE_MIN;
+  const tag = stale ? `No update for ${fmtAge(fixAge)}` : arriving ? "Now arriving" : moving ? `Moving · ${Math.round(t.velocity)} mph` : at ? "At station" : "Stopped";
+  const tagClass = stale ? " stale" : arriving ? " arriving" : moving ? " moving" : "";
   detailEl.innerHTML = `
     <button class="back" data-action="back">← All trains</button>
-    <div class="sprite-stage${at ? " at-station" : ""}">
-      <span class="motion-tag${moving ? " moving" : ""}">${moving ? `Moving · ${Math.round(t.velocity)} mph` : at ? "At station" : "Stopped"}</span>
+    <div class="sprite-stage${platform ? " at-station" : ""}">
+      <span class="motion-tag${tagClass}">${tag}</span>
       <div class="train-wrap">
         ${stationArt}
         <img class="train" src="${spriteUrls[`side-${moving ? "move" : "idle"}`]}" alt="" />
@@ -860,9 +1065,10 @@ function renderDetail() {
     <p class="od">${esc(t.origName)} → ${esc(t.destName)}</p>
     <dl class="facts">
       <div><dt>Status</dt><dd>${esc(status.label)}</dd></div>
-      <div><dt>Speed</dt><dd>${moving ? `${Math.round(t.velocity)} mph ${esc(t.heading ?? "")}` : "Stopped"}</dd></div>
+      <div><dt>${stale ? "Last speed" : "Speed"}</dt><dd>${moving ? `${Math.round(t.velocity)} mph ${esc(t.heading ?? "")}` : "Stopped"}</dd></div>
       <div><dt>Next stop</dt><dd>${next ? `${esc(next.name)} · ${fmtTime(next.arr || next.dep, next.tz)}` : "—"}</dd></div>
       <div><dt>Operator</dt><dd>${esc(t.provider ?? "Amtrak")}</dd></div>
+      <div class="${stale ? "stale" : ""}"><dt>Last update</dt><dd>${Number.isFinite(fixAge) ? `${fmtAge(fixAge)} ago · ${fmtClock(Date.parse(t.lastValTS), t.eventTZ)}` : "—"}</dd></div>
     </dl>
     <div class="links">
       <a href="https://amtraker.com/trains/${encodeURIComponent(t.trainNum)}/${encodeURIComponent(t.trainID.split("-")[1] ?? "")}" target="_blank" rel="noopener">Amtraker ↗</a>
@@ -1028,19 +1234,28 @@ function stageStop(stop, kind) {
 
 // The stop a train is standing at (if any), the one it last left and the one it's heading for.
 // "At" means the API says it's in the station, or it's stopped within 800 m of its next stop.
+// "Arriving" means it's still moving but in the station already or within ARRIVING_M of it.
 function stopContext(t, moving) {
   const stops = t.stations;
   const nextIdx = stops.findIndex((s) => s.status !== "Departed");
-  let atIdx = stops.findIndex((s) => s.status === "Station");
-  if (atIdx < 0 && !moving && nextIdx >= 0) {
-    const st = state.stations[stops[nextIdx].code];
-    const pos = trainPosition(t);
-    const metres = st ? Math.hypot((st.lon - pos.lon) * 111_320 * Math.cos((pos.lat * Math.PI) / 180), (st.lat - pos.lat) * 110_540) : Infinity;
-    if (metres < 800) atIdx = nextIdx;
+  const stationIdx = stops.findIndex((s) => s.status === "Station");
+  const toNext = nextIdx >= 0 ? distanceToStop(t, stops[nextIdx]) : Infinity;
+  if (moving) {
+    const arrivingIdx = stationIdx >= 0 ? stationIdx : toNext < ARRIVING_M ? nextIdx : -1;
+    if (arrivingIdx >= 0) return { at: null, arriving: stops[arrivingIdx], last: stops[arrivingIdx - 1] ?? null, upcoming: stops[arrivingIdx + 1] ?? null };
+  } else {
+    const atIdx = stationIdx >= 0 ? stationIdx : toNext < 800 ? nextIdx : -1;
+    if (atIdx >= 0) return { at: stops[atIdx], arriving: null, last: stops[atIdx - 1] ?? null, upcoming: stops[atIdx + 1] ?? null };
   }
-  if (atIdx >= 0) return { at: stops[atIdx], last: stops[atIdx - 1] ?? null, upcoming: stops[atIdx + 1] ?? null };
   const lastIdx = nextIdx < 0 ? stops.length - 1 : nextIdx - 1;
-  return { at: null, last: stops[lastIdx] ?? null, upcoming: nextIdx >= 0 ? stops[nextIdx] : null };
+  return { at: null, arriving: null, last: stops[lastIdx] ?? null, upcoming: nextIdx >= 0 ? stops[nextIdx] : null };
+}
+
+function distanceToStop(t, stop) {
+  const st = state.stations[stop.code];
+  if (!st || !Number.isFinite(st.lat)) return Infinity;
+  const pos = trainPosition(t);
+  return Math.hypot((st.lon - pos.lon) * 111_320 * Math.cos((pos.lat * Math.PI) / 180), (st.lat - pos.lat) * 110_540);
 }
 
 function timeliness(t) {
@@ -1067,6 +1282,13 @@ function fmtTime(iso, tz) {
   } catch {
     return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   }
+}
+
+// "<1 min", "4 min", "1h 12m" for an age in minutes.
+function fmtAge(minutes) {
+  if (minutes < 1) return "<1 min";
+  if (minutes < 60) return `${Math.round(minutes)} min`;
+  return `${Math.floor(minutes / 60)}h ${Math.round(minutes % 60)}m`;
 }
 
 function fmtClock(ms, tz) {

@@ -115,8 +115,22 @@ export function positionAt(plan, now, behind = 0) {
   const s = Math.min(Math.max(0, (now - plan.t0) / 1000), MAX_TRACK_S);
   let along = plan.along0 + plan.dir * plan.speed * s;
   along = plan.dir > 0 ? Math.min(along, plan.limit) : Math.max(along, plan.limit);
-  const p = pointAt(plan.coords, plan.cum, along - plan.dir * behind);
+  const p = extendedPointAt(plan.coords, plan.cum, along - plan.dir * behind);
   return { lon: p.lon, lat: p.lat, bearing: plan.dir > 0 ? p.bearing : (p.bearing + 180) % 360 };
+}
+
+// Like pointAt, but past either end of the shape it carries on in a straight line along the
+// end segment instead of clamping, so the rear of a train standing near the end of its route
+// (e.g. at its origin terminal) stays spread out rather than piling onto the last point.
+function extendedPointAt(coords, cum, along) {
+  const end = cum[cum.length - 1];
+  if (along >= 0 && along <= end) return pointAt(coords, cum, along);
+  const atStart = along < 0;
+  const p = pointAt(coords, cum, atStart ? 0 : end);
+  const overshoot = atStart ? along : along - end; // negative heads backwards off the start
+  const rad = (p.bearing * Math.PI) / 180;
+  const kx = Math.cos((p.lat * Math.PI) / 180) * M_PER_DEG_LON;
+  return { lon: p.lon + (overshoot * Math.sin(rad)) / kx, lat: p.lat + (overshoot * Math.cos(rad)) / M_PER_DEG_LAT, bearing: p.bearing };
 }
 
 /**

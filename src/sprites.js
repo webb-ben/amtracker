@@ -227,14 +227,29 @@ function stationRows() {
 }
 
 // Returns canvases keyed "side-<state>", "loco-<state>", "car-<state>", "car-tail-<state>", "station".
+// Narrow variants for trains drawn side by side: the 12-wide top-view grids lose four interior
+// columns (two each side of centre), keeping the outline, livery edge and centre detail.
+const NARROW_DROP = new Set([2, 4, 7, 9]);
+export const NARROW_WIDTH = 12 - NARROW_DROP.size;
+
+function narrow(rows) {
+  return rows.map((row) => [...row].filter((_, x) => !NARROW_DROP.has(x)).join(""));
+}
+
 export function buildSprites(scale = SCALE) {
   const sprites = {};
   for (const [state, f] of Object.entries(STATES)) {
     sprites[`side-${state}`] = rasterize(sideRows(state), scale);
-    sprites[`loco-${state}`] = rasterize(applyState(LOCO_TOP, f), scale);
-    // Only the last car shows tail lights.
-    sprites[`car-${state}`] = rasterize(applyState(CAR_TOP, { ...f, T: "b" }), scale);
-    sprites[`car-tail-${state}`] = rasterize(applyState(CAR_TOP, f), scale);
+    const top = {
+      [`loco-${state}`]: applyState(LOCO_TOP, f),
+      // Only the last car shows tail lights.
+      [`car-${state}`]: applyState(CAR_TOP, { ...f, T: "b" }),
+      [`car-tail-${state}`]: applyState(CAR_TOP, f),
+    };
+    for (const [key, rows] of Object.entries(top)) {
+      sprites[key] = rasterize(rows, scale);
+      sprites[`${key}-narrow`] = rasterize(narrow(rows), scale);
+    }
   }
   sprites.station = rasterize(stationRows(), scale);
   return sprites;
@@ -246,6 +261,7 @@ export function spriteImageData(canvas) {
 
 // Direction indicator filled with `color` (the app colours it by speed): `chevrons` stacked
 // chevrons, or a flat bar for 0.
-export function buildArrow(color = PALETTE.a, chevrons = 1, scale = SCALE) {
-  return rasterize(arrowRows(chevrons), scale, { ...PALETTE, a: color });
+export function buildArrow(color = PALETTE.a, chevrons = 1, { thin = false, scale = SCALE } = {}) {
+  const rows = arrowRows(chevrons);
+  return rasterize(thin ? narrow(rows) : rows, scale, { ...PALETTE, a: color });
 }

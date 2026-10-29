@@ -396,6 +396,17 @@ h1 {
   background: #f5b800;
   color: #141a28;
 }
+.motion-tag.arriving {
+  background: #2fb36a;
+  color: #08210f;
+}
+.motion-tag.stale {
+  background: #6b2a26;
+  color: #ffd9d4;
+}
+.facts .stale dd {
+  color: #c8102e;
+}
 #detail h2 {
   font-size: 18px;
   margin: 12px 0 2px;
