@@ -446,57 +446,6 @@ function planFor(t, coords) {
   return planMotion(t, coords, st && Number.isFinite(st.lat) ? st : undefined, HEADING_DEG[t.heading]);
 }
 
-// Some GTFS shapes skip past a station the train actually uses (Keystone and Pennsylvanian
-// shapes cut across the wye ~2 km from Philadelphia 30th Street, where those trains reverse),
-// so a train standing there is too far from its shape and falls back to a straight compass
-// line. For those, borrow the nearest Overture rail line drawn under the train as a local
-// track, so its cars sit along the real platform track. Needs the rail layers on screen
-// (zoom ≥ 8); runs when the map goes idle and keeps the result until the next refresh.
-const RAIL_LAYERS = ["rail-freight", "rail-passenger"];
-const SNAP_PX = 40;
-
-function snapFreePlansToRail() {
-  if (map.getZoom() < SPRITE_ZOOM || !RAIL_LAYERS.every((id) => map.getLayer(id))) return;
-  const bounds = map.getBounds();
-  let changed = false;
-  for (const t of state.trains) {
-    const plan = state.plans.get(t.trainID);
-    if (plan?.kind !== "free" || plan.snapTried || !bounds.contains([t.lon, t.lat])) continue;
-    plan.snapTried = true;
-    const coords = nearestRail(t);
-    if (!coords) continue;
-    const local = planFor(t, coords);
-    if (local.kind === "track") {
-      state.plans.set(t.trainID, local);
-      changed = true;
-    }
-  }
-  if (changed) updateTrains();
-}
-
-function nearestRail(t) {
-  const p = map.project([t.lon, t.lat]);
-  const box = [
-    [p.x - SNAP_PX, p.y - SNAP_PX],
-    [p.x + SNAP_PX, p.y + SNAP_PX],
-  ];
-  let best = { dist: SNAP_PX, coords: null };
-  for (const f of map.queryRenderedFeatures(box, { layers: RAIL_LAYERS })) {
-    const lines = f.geometry.type === "LineString" ? [f.geometry.coordinates] : f.geometry.type === "MultiLineString" ? f.geometry.coordinates : [];
-    for (const line of lines) {
-      const screen = line.map((c) => {
-        const s = map.project(c);
-        return [s.x, s.y];
-      });
-      for (let i = 0; i < screen.length - 1; i++) {
-        const d = segmentDistance([p.x, p.y], [p.x, p.y], screen[i], screen[i + 1]);
-        if (d < best.dist) best = { dist: d, coords: line };
-      }
-    }
-  }
-  return best.coords;
-}
-
 function trainPosition(t, now = Date.now()) {
   const plan = state.plans.get(t.trainID);
   return plan ? positionAt(plan, now) : { lon: t.lon, lat: t.lat, bearing: HEADING_DEG[t.heading] ?? 0 };
@@ -810,7 +759,6 @@ function animate(ts) {
 requestAnimationFrame(animate);
 map.on("zoom", () => (zooming = true));
 map.on("moveend", () => (lastMotion = 0)); // pick up trains panned into view
-map.on("idle", snapFreePlansToRail);
 
 // The side view depends on the extrapolated position (e.g. "Now arriving"), so refresh it
 // between API updates too.
