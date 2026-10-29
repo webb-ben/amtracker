@@ -347,6 +347,11 @@ function trainFeatures() {
   const points = [];
   const trails = [];
   const vehicles = [];
+  // Vehicles and trails are rebuilt every frame while zooming, so only bother with what's near the view.
+  const b = map.getBounds();
+  const padX = (b.getEast() - b.getWest()) * 0.25;
+  const padY = (b.getNorth() - b.getSouth()) * 0.25;
+  const nearView = (p) => p.lon > b.getWest() - padX && p.lon < b.getEast() + padX && p.lat > b.getSouth() - padY && p.lat < b.getNorth() + padY;
   for (const t of state.trains) {
     const pos = trainPosition(t, now);
     const properties = {
@@ -359,6 +364,7 @@ function trainFeatures() {
       selected: t.trainID === state.selectedId,
     };
     points.push({ type: "Feature", geometry: { type: "Point", coordinates: [pos.lon, pos.lat] }, properties });
+    if (!nearView(pos)) continue;
     const plan = state.plans.get(t.trainID);
     const metersPerPx = (78271.517 * Math.cos((pos.lat * Math.PI) / 180)) / 2 ** zoom;
     if (zoom >= SPRITE_ZOOM) vehicles.push(...vehicleFeatures(t, plan, now, zoom, metersPerPx, properties));
@@ -432,14 +438,20 @@ setInterval(refresh, REFRESH_MS);
 // Slide trains along between refreshes. Reduced-motion users get a slow step instead.
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 let lastMotion = 0;
+let zooming = false;
 function animate(ts) {
-  if (ts - lastMotion >= (reduceMotion ? 10_000 : MOTION_MS)) {
+  // Car spacing and trail length depend on zoom, so redraw every frame while zooming;
+  // otherwise they lag behind icon-size and the cars bounce.
+  if (zooming || ts - lastMotion >= (reduceMotion ? 10_000 : MOTION_MS)) {
     lastMotion = ts;
+    zooming = false;
     updateTrains();
   }
   requestAnimationFrame(animate);
 }
 requestAnimationFrame(animate);
+map.on("zoom", () => (zooming = true));
+map.on("moveend", () => (lastMotion = 0)); // pick up trains panned into view
 
 // ---------------------------------------------------------------------------
 // Panel
