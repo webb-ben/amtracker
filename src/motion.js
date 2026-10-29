@@ -107,6 +107,15 @@ export function planMotion(train, coords, nextStop, compass) {
   return { kind: "track", coords, cum, along0: here.along, dir, limit, holdsAtStop, speed, t0 };
 }
 
+/** How far (meters) the train's nose has travelled along its path since the plan's fix. */
+export function travelledAt(plan, now) {
+  if (!plan) return 0;
+  if (plan.kind === "free") return plan.speed * Math.min(Math.max(0, (now - plan.t0) / 1000), MAX_FREE_S);
+  const s = Math.min(Math.max(0, (now - plan.t0) / 1000), MAX_TRACK_S);
+  const along = plan.along0 + plan.dir * plan.speed * s;
+  return Math.abs((plan.dir > 0 ? Math.min(along, plan.limit) : Math.max(along, plan.limit)) - plan.along0);
+}
+
 /** True once dead reckoning has carried a moving train up to its next stop, where it holds. */
 export function hasArrived(plan, now) {
   if (plan?.kind !== "track" || !plan.holdsAtStop || !plan.speed) return false;

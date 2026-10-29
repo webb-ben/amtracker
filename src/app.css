@@ -279,16 +279,31 @@ h1 {
 .sprite-stage .train-wrap {
   margin-top: 48px;
 }
+/* Sits left of centre so the headlight beam has room ahead of the loco before the stage edge. */
 .train-wrap {
   position: relative;
   width: 300px;
-  max-width: 94%;
-  margin: 0 auto -2px;
+  max-width: 84%;
+  margin: 0 auto -2px 4%;
   container-type: inline-size;
 }
 /* Train number on the first car behind the loco, over its window band (side sprite: 132 art px
    wide, 14 tall; that car spans columns 48–86, windows on rows 3–4). A white outline keeps it
    readable over the blue. */
+/* Headlight beam from the loco's nose (side sprite: headlight at column 128 of 132, row ~6 of
+   14), widening and fading ahead; the stage clips it at its edge. */
+.side-beam {
+  position: absolute;
+  z-index: 0;
+  left: 97%;
+  top: 46%;
+  width: 34%;
+  height: 70%;
+  transform: translateY(-50%);
+  background: linear-gradient(90deg, rgba(255, 236, 160, 0.8), rgba(255, 226, 140, 0.25) 55%, transparent);
+  clip-path: polygon(0 44%, 100% 0, 100% 100%, 0 56%);
+  pointer-events: none;
+}
 .car-number {
   position: absolute;
   z-index: 2;
