@@ -95,6 +95,7 @@ const state = {
   trainShapes: {}, // train number -> shape id
   shapeCoords: new Map(), // shape id -> [lon, lat][]
   plans: new Map(), // trainID -> dead-reckoning plan, rebuilt on every refresh
+  stationTracks: [], // rail lines around major stations, from data/station-tracks.geojson
   lanes: new Map(), // trainID -> lane it was drawn in last frame, so lanes stick
   laneAnims: new Map(), // trainID -> { from, to, start } crossover between lanes
   crossing: false, // any crossover in progress (animate every frame)
@@ -430,6 +431,11 @@ async function loadRoutes() {
   } catch (err) {
     console.warn("Route geometry unavailable; run scripts/build_routes.py", err);
   }
+  try {
+    state.stationTracks = (await fetch("data/station-tracks.geojson").then((r) => r.json())).features;
+  } catch {
+    state.stationTracks = []; // optional; built by `npm run station-tracks`
+  }
 }
 
 function shapeFor(t) {
@@ -443,7 +449,27 @@ function buildPlans() {
 function planFor(t, coords) {
   const next = nextStop(t);
   const st = next && state.stations[next.code];
-  return planMotion(t, coords, st && Number.isFinite(st.lat) ? st : undefined, HEADING_DEG[t.heading]);
+  const plan = planMotion(t, coords, st && Number.isFinite(st.lat) ? st : undefined, HEADING_DEG[t.heading]);
+  if (plan.kind === "track") return plan;
+  // Too far from its GTFS shape (some shapes skip the station tracks a train really uses):
+  // fall back to the nearest stored station track, see scripts/build_station_tracks.mjs.
+  const local = nearestStationTrack(t);
+  return local ? planMotion(t, local, st && Number.isFinite(st.lat) ? st : undefined, HEADING_DEG[t.heading]) : plan;
+}
+
+const STATION_TRACK_M = 120; // how far a train may be from a stored station track to use it
+
+function nearestStationTrack(t) {
+  const kx = 111_320 * Math.cos((t.lat * Math.PI) / 180);
+  let best = { d: STATION_TRACK_M, coords: null };
+  for (const f of state.stationTracks) {
+    const c = f.geometry.coordinates;
+    for (let i = 0; i < c.length - 1; i++) {
+      const d = segmentDistance([t.lon * kx, t.lat * 110_540], [t.lon * kx, t.lat * 110_540], [c[i][0] * kx, c[i][1] * 110_540], [c[i + 1][0] * kx, c[i + 1][1] * 110_540]);
+      if (d < best.d) best = { d, coords: c };
+    }
+  }
+  return best.coords;
 }
 
 function trainPosition(t, now = Date.now()) {
@@ -513,32 +539,33 @@ function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneAt) {
 function laneTransition(id, lane, now) {
   let anim = state.laneAnims.get(id);
   if (!anim) {
-    anim = { from: lane, to: lane, start: 0 };
+    anim = { from: Array(MAX_VEHICLES).fill(lane), to: lane, start: 0 };
   } else if (anim.to !== lane) {
-    // Start from wherever the front of the train currently is, so a reversal mid-crossover is smooth.
-    anim = { from: laneProgress(anim, now, 0), to: lane, start: now };
+    // Each vehicle starts from wherever it is now, so a new target mid-crossover still plays out
+    // car by car instead of the whole train jumping to where the loco had got to.
+    anim = { from: anim.from.map((_, k) => laneProgress(anim, now, k)), to: lane, start: now };
   }
   state.laneAnims.set(id, anim);
-  const active = anim.from !== anim.to && now - anim.start < CROSSOVER_MS + CROSSOVER_STAGGER_MS * MAX_VEHICLES;
+  const active = anim.from.some((f) => f !== anim.to) && now - anim.start < CROSSOVER_MS + CROSSOVER_STAGGER_MS * MAX_VEHICLES;
   return { laneAt: (k) => laneProgress(anim, now, k), active };
 }
 
 function laneProgress(anim, now, k) {
+  const from = anim.from[Math.min(k, anim.from.length - 1)];
   const u = Math.min(1, Math.max(0, (now - anim.start - k * CROSSOVER_STAGGER_MS) / CROSSOVER_MS));
   const eased = u * u * (3 - 2 * u); // smoothstep
-  return anim.from + (anim.to - anim.from) * eased;
+  return from + (anim.to - from) * eased;
 }
 
 // Give overlapping trains different lanes. Works in screen space on each train's drawn path
 // (a polyline through its cars, head first), so curved trains whose tails swing across a
 // neighbour are caught, and it adapts to zoom.
 //
-// Trains standing at a station are placed first, so they keep their track and moving trains
+// Stopped trains are placed first and keep whatever lane they already have, so moving trains
 // pass around them. After that lanes are sticky: trains already holding a lane are placed
 // before newcomers, so an arriving train goes around a waiting one instead of shoving it aside.
-// Incumbents on the centre track go first and keep it; incumbents in a side lane try the centre
-// again (to drift back once it clears), then their old lane. Within each group moving trains go
-// first, then the selected train, then by ID.
+// Moving incumbents try the centre again (to drift back once it clears), then their old lane.
+// Within each group moving trains go first, then the selected train, then by ID.
 function assignLanes(entries, zoom) {
   const sprite = zoom >= SPRITE_ZOOM;
   const scale = sprite ? iconSizeAt(zoom) : 1;
@@ -546,7 +573,7 @@ function assignLanes(entries, zoom) {
   const spacing = sprite ? LANE_ICON_PX * scale : LANE_TRAIL_PX;
   const previous = state.lanes;
   const group = (e) => (!previous.has(e.t.trainID) ? 2 : previous.get(e.t.trainID) === 0 ? 0 : 1);
-  const parked = (e) => !e.properties.moving && !e.properties.arrow; // no arrow = standing at a station
+  const parked = (e) => !e.properties.moving;
   entries.sort(
     (a, b) =>
       parked(b) - parked(a) ||
@@ -560,7 +587,9 @@ function assignLanes(entries, zoom) {
   for (const e of entries) {
     const normals = rightNormals(e.path);
     const prior = previous.get(e.t.trainID);
-    const order = prior === undefined ? LANES : [0, prior, ...LANES.filter((l) => l !== 0 && l !== prior)];
+    // A stopped train stays put in the lane it already has; a moving one drifts back toward
+    // the centre when it's free.
+    const order = prior === undefined ? LANES : parked(e) ? [prior, ...LANES.filter((l) => l !== prior)] : [0, prior, ...LANES.filter((l) => l !== 0 && l !== prior)];
     e.lane = prior ?? 0;
     let path = e.path;
     for (const lane of order) {

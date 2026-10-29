@@ -50,6 +50,17 @@ python3 scripts/speed/build.py /tmp/speed data/speed-segments.geojson
 Pushes to `main` publish the site to GitHub Pages via `.github/workflows/pages.yml`
 (it copies `index.html`, `sprites.html`, `src/` and `data/`; there is no build step).
 
+## Station tracks
+
+Some GTFS shapes miss the platform tracks a train really uses (e.g. Keystone trains at
+Philadelphia 30th Street). For about 40 major stations, `data/station-tracks.geojson` holds the
+active rail lines within 1.5 km, taken from Overture's transportation tiles; a train too far from
+its own shape snaps to the nearest of these. Rebuild with:
+
+```sh
+npm install && npm run station-tracks
+```
+
 ## Refresh route data
 
 Amtrak's schedule changes a few times a year. Rebuild `data/routes.geojson` and
