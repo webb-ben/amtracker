@@ -565,17 +565,27 @@ async function setSpeedHeatmap(on) {
   info.hidden = !on;
   if (on && !state.speed) {
     info.textContent = "Loading speeds…";
-    try {
-      const res = await fetch("data/speed-segments.geojson");
-      if (!res.ok) throw new Error(res.status);
-      state.speed = await res.json();
-      map.getSource("speed")?.setData(state.speed);
-    } catch {
-      state.speed = { type: "FeatureCollection", features: [] };
-    }
+    state.speed = (await loadSpeedSegments()) ?? { type: "FeatureCollection", features: [] };
+    map.getSource("speed")?.setData(state.speed);
   }
   if (on) renderSpeedInfo();
   if (map.getLayer("speed-heatmap")) map.setLayoutProperty("speed-heatmap", "visibility", on ? "visible" : "none");
+}
+
+// The collector workflow publishes straight to the speed-data branch, so read it from there
+// (raw.githubusercontent.com allows cross-origin reads and caches for ~5 minutes). When running
+// locally, a hand-built data/speed-segments.geojson takes precedence.
+const SPEED_URL = "https://raw.githubusercontent.com/webb-ben/amtracker/speed-data/speed-segments.geojson";
+
+async function loadSpeedSegments() {
+  const local = ["localhost", "127.0.0.1"].includes(location.hostname);
+  for (const url of local ? ["data/speed-segments.geojson", SPEED_URL] : [SPEED_URL]) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return await res.json();
+    } catch {}
+  }
+  return null;
 }
 
 function renderSpeedInfo() {

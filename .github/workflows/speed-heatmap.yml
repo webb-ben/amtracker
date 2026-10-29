@@ -1,8 +1,9 @@
 name: Collect train speeds
 
 # Samples live train speeds every 10 minutes and rebuilds the 30-day speed heatmap.
-# Samples and the heatmap live on the `speed-data` branch, which is force-pushed as a single
-# commit each run so it never accumulates history. The Pages workflow publishes the heatmap.
+# Samples and the heatmap live on the `speed-data` branch: an orphan branch (no shared history
+# with main) that is force-pushed as a single new root commit each run, so it never accumulates
+# history. The site reads speed-segments.geojson from that branch directly.
 
 on:
   schedule:

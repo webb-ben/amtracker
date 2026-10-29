@@ -3,9 +3,6 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
-  # Daily redeploy picks up the latest speed heatmap from the speed-data branch.
-  schedule:
-    - cron: "20 6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -32,9 +29,6 @@ jobs:
         run: |
           mkdir _site
           cp -r index.html sprites.html src data _site/
-          if git fetch --depth 1 origin speed-data; then
-            git show FETCH_HEAD:speed-segments.geojson > _site/data/speed-segments.geojson
-          fi
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
