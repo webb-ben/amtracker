@@ -30,7 +30,7 @@ python3 -m http.server 8000
 
 ## Speed heatmap
 
-`.github/workflows/speed-heatmap.yml` samples live train speeds every 10 minutes
+`.github/workflows/speed-heatmap.yml` samples live train speeds every 15 minutes
 (`scripts/speed/collect.py`), snapping each moving train to a ~1 km segment of its GTFS route.
 Daily totals and the 30-day average (`scripts/speed/build.py` → `speed-segments.geojson`) live on
 the orphan `speed-data` branch, which is force-pushed as a single commit each run. The page reads

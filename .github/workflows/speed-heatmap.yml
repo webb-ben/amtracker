@@ -1,6 +1,6 @@
 name: Collect train speeds
 
-# Samples live train speeds every 10 minutes and rebuilds the 30-day speed heatmap.
+# Samples live train speeds every 15 minutes and rebuilds the 30-day speed heatmap.
 # Samples and the heatmap live on the `speed-data` branch: an orphan branch (no shared history
 # with main) that is force-pushed as a single new root commit each run, so it never accumulates
 # history. The site reads speed-segments.geojson from that branch directly.
@@ -8,7 +8,7 @@ name: Collect train speeds
 on:
   schedule:
     # Off the round minutes, which GitHub's scheduler is most likely to delay or drop.
-    - cron: "7-59/10 * * * *"
+    - cron: "7-59/15 * * * *"
   workflow_dispatch:
 
 permissions:
