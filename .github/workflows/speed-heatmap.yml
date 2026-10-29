@@ -1,0 +1,49 @@
+name: Collect train speeds
+
+# Samples live train speeds every 10 minutes and rebuilds the 30-day speed heatmap.
+# Samples and the heatmap live on the `speed-data` branch, which is force-pushed as a single
+# commit each run so it never accumulates history. The Pages workflow publishes the heatmap.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: speed-data
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch existing samples
+        run: |
+          mkdir speed-data
+          if git fetch --depth 1 origin speed-data; then
+            git archive FETCH_HEAD | tar -x -C speed-data
+          fi
+
+      - name: Collect and build
+        run: |
+          python3 scripts/speed/collect.py speed-data
+          python3 scripts/speed/build.py speed-data speed-data/speed-segments.geojson
+
+      - name: Publish to speed-data branch
+        working-directory: speed-data
+        run: |
+          git init -q -b speed-data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Speed samples $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" speed-data

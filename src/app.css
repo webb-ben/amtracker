@@ -169,6 +169,31 @@ h1 {
     linear-gradient(var(--freight), var(--freight)) center / 100% 2px no-repeat;
   height: 6px;
 }
+.legend-toggle {
+  flex-basis: 100%;
+}
+.legend-toggle label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--text);
+}
+.speed-info {
+  margin: 0 14px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.speed-info .ramp {
+  height: 8px;
+  border-radius: 4px;
+}
+.speed-info .ramp-labels {
+  display: flex;
+  justify-content: space-between;
+  margin: 2px 0 4px;
+  font-variant-numeric: tabular-nums;
+}
 .swatch.passenger {
   background: var(--rail);
   height: 2px;
@@ -247,14 +272,71 @@ h1 {
   overflow: hidden;
   text-align: center;
 }
-.sprite-stage img {
+.sprite-stage.at-station {
+  padding-top: 64px;
+}
+.train-wrap {
   position: relative;
-  z-index: 1;
   width: 300px;
   max-width: 94%;
-  image-rendering: pixelated;
-  display: block;
   margin: 0 auto -2px;
+}
+.train-wrap img {
+  display: block;
+  image-rendering: pixelated;
+}
+.train-wrap .train {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+}
+/* Station building sits behind the front of the train, its platform level with the rails. */
+.train-wrap .station {
+  position: absolute;
+  bottom: 0;
+  left: 60%;
+  transform: translateX(-50%);
+}
+.station-sign {
+  position: absolute;
+  left: 60%;
+  transform: translate(-50%, -3px);
+  max-width: 70%;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #102257;
+  border: 1px solid #f5b800;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stage-stops {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 10px 6px;
+  font-size: 11px;
+  color: #b9c4e4;
+}
+.stage-stops .stop {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  max-width: 50%;
+  white-space: nowrap;
+}
+.stage-stops .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stage-stops .time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 .track {
   height: 8px;

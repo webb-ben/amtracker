@@ -28,6 +28,21 @@ python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
+## Speed heatmap
+
+`.github/workflows/speed-heatmap.yml` samples live train speeds every 10 minutes
+(`scripts/speed/collect.py`), snapping each moving train to a ~1 km segment of its GTFS route.
+Daily totals and the 30-day average (`scripts/speed/build.py` → `speed-segments.geojson`) live on
+the `speed-data` branch, which is force-pushed as a single commit each run. The Pages deploy copies
+the heatmap into `data/` daily; turn it on with the "Speed heatmap" toggle or `?speed=1`.
+
+To try it locally:
+
+```sh
+python3 scripts/speed/collect.py /tmp/speed        # run a few times, minutes apart
+python3 scripts/speed/build.py /tmp/speed data/speed-segments.geojson
+```
+
 ## Deploy
 
 Pushes to `main` publish the site to GitHub Pages via `.github/workflows/pages.yml`

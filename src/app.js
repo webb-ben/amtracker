@@ -10,6 +10,15 @@ const CAR_ZOOMS = [10, 11.5, 12.5, 13.25, 14, 14.75]; // zoom at which the 1st, 
 const ICON_SIZE = [7, 0.6, 12, 0.95, 15, 1.6]; // [zoom, size, …] for vehicle sprites
 const TRAIL_PX = 26; // on-screen length of a low-zoom train
 
+// [mph, color] stops for the speed heatmap: slow is deep purple, fast is bright yellow.
+const SPEED_RAMP = [
+  [15, "#4a1486"],
+  [35, "#9c179e"],
+  [55, "#d8576b"],
+  [75, "#f89540"],
+  [100, "#f0f921"],
+];
+
 const HEADING_DEG = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
 
 const protocol = new pmtiles.Protocol();
@@ -29,6 +38,8 @@ const state = {
   shapeCoords: new Map(), // shape id -> [lon, lat][]
   plans: new Map(), // trainID -> dead-reckoning plan, rebuilt on every refresh
   loaded: false, // first successful fetch applies ?train= / ?station=
+  speed: null, // 30-day speed heatmap, fetched the first time it's switched on
+  showSpeed: false,
   theme: preferredTheme(),
 };
 
@@ -55,7 +66,7 @@ map.on("style.load", addOverlays);
 
 function addOverlays() {
   for (const [id, canvas] of Object.entries(sprites)) {
-    if (!id.startsWith("side-") && !map.hasImage(id)) {
+    if (!id.startsWith("side-") && id !== "station" && !map.hasImage(id)) {
       map.addImage(id, spriteImageData(canvas), { pixelRatio: SCALE / 1.5 });
     }
   }
@@ -83,6 +94,21 @@ function addOverlays() {
         "line-color": dark ? "#55638a" : "#8d9ccb",
         "line-opacity": ["interpolate", ["linear"], ["zoom"], 3, 0.9, 10, 0.6],
         "line-width": ["interpolate", ["linear"], ["zoom"], 3, 1.2, 8, 2, 13, 3],
+      },
+    },
+    "water-labels",
+  );
+  // 30-day average speed per ~1 km of track, from scripts/speed (see the speed-heatmap workflow).
+  map.addSource("speed", { type: "geojson", data: state.speed ?? { type: "FeatureCollection", features: [] } });
+  map.addLayer(
+    {
+      id: "speed-heatmap",
+      type: "line",
+      source: "speed",
+      layout: { "line-join": "round", "line-cap": "round", visibility: state.showSpeed ? "visible" : "none" },
+      paint: {
+        "line-color": ["interpolate", ["linear"], ["get", "mph"], ...SPEED_RAMP.flat()],
+        "line-width": ["interpolate", ["linear"], ["zoom"], 3, 2.5, 8, 4, 13, 7],
       },
     },
     "water-labels",
@@ -476,6 +502,44 @@ $("#theme-toggle").addEventListener("click", () => {
 
 $("#panel-toggle").addEventListener("click", () => document.body.classList.toggle("panel-collapsed"));
 
+const speedToggle = $("#speed-toggle");
+speedToggle.addEventListener("change", () => setSpeedHeatmap(speedToggle.checked));
+
+async function setSpeedHeatmap(on) {
+  state.showSpeed = on;
+  speedToggle.checked = on;
+  setUrlParam("speed", on ? "1" : null);
+  const info = $("#speed-info");
+  info.hidden = !on;
+  if (on && !state.speed) {
+    info.textContent = "Loading speeds…";
+    try {
+      const res = await fetch("data/speed-segments.geojson");
+      if (!res.ok) throw new Error(res.status);
+      state.speed = await res.json();
+      map.getSource("speed")?.setData(state.speed);
+    } catch {
+      state.speed = { type: "FeatureCollection", features: [] };
+    }
+  }
+  if (on) renderSpeedInfo();
+  if (map.getLayer("speed-heatmap")) map.setLayoutProperty("speed-heatmap", "visibility", on ? "visible" : "none");
+}
+
+function renderSpeedInfo() {
+  const meta = state.speed?.metadata;
+  const info = $("#speed-info");
+  if (!state.speed?.features.length) {
+    info.textContent = "No speed samples yet — the collector needs a few runs.";
+    return;
+  }
+  const stops = SPEED_RAMP.map(([mph, color]) => `${color} ${((mph - SPEED_RAMP[0][0]) / (SPEED_RAMP.at(-1)[0] - SPEED_RAMP[0][0])) * 100}%`).join(", ");
+  info.innerHTML = `
+    <div class="ramp" style="background: linear-gradient(90deg, ${stops})"></div>
+    <div class="ramp-labels"><span>${SPEED_RAMP[0][0]} mph</span><span>${SPEED_RAMP.at(-1)[0]}+</span></div>
+    <div>Average moving speed${meta?.days ? ` · ${meta.days} day${meta.days > 1 ? "s" : ""} of samples` : ""}</div>`;
+}
+
 function preferredTheme() {
   try {
     const saved = localStorage.getItem("theme");
@@ -570,6 +634,7 @@ function applyUrl() {
     const t = state.trains.find((x) => x.trainID === wanted) ?? state.trains.find((x) => x.trainNum === num);
     if (t) selectTrain(t.trainID, { fit: !linkHasView });
   }
+  if (params.get("speed") === "1") setSpeedHeatmap(true);
   const station = params.get("station");
   if (station && state.stations[station.toUpperCase()]) showStation(station.toUpperCase());
 }
@@ -593,12 +658,25 @@ function renderDetail() {
   const moving = (t.velocity ?? 0) > 1;
   const status = timeliness(t);
   const next = nextStop(t);
+  const { at, last, upcoming } = stopContext(t, moving);
+  const side = sprites[`side-${moving ? "move" : "idle"}`];
+  const stationArt = at
+    ? `<img class="station" src="${spriteUrls.station}" alt="" style="width:${(sprites.station.width / side.width) * 100}%" />
+       <span class="station-sign" style="bottom:${(sprites.station.height / side.height) * 100}%">${esc(at.name)}</span>`
+    : "";
   detailEl.innerHTML = `
     <button class="back" data-action="back">← All trains</button>
-    <div class="sprite-stage">
-      <span class="motion-tag${moving ? " moving" : ""}">${moving ? `Moving · ${Math.round(t.velocity)} mph` : "Stopped"}</span>
-      <img src="${spriteUrls[`side-${moving ? "move" : "idle"}`]}" alt="" />
+    <div class="sprite-stage${at ? " at-station" : ""}">
+      <span class="motion-tag${moving ? " moving" : ""}">${moving ? `Moving · ${Math.round(t.velocity)} mph` : at ? "At station" : "Stopped"}</span>
+      <div class="train-wrap">
+        ${stationArt}
+        <img class="train" src="${spriteUrls[`side-${moving ? "move" : "idle"}`]}" alt="" />
+      </div>
       <div class="track${moving ? " moving" : ""}"></div>
+      <div class="stage-stops">
+        ${stageStop(last, "last")}
+        ${stageStop(upcoming, "upcoming")}
+      </div>
     </div>
     <h2><span class="badge" style="background:${esc(t.iconColor)};color:${esc(t.textColor)}">${esc(t.trainNum)}</span> ${esc(t.routeName)}</h2>
     <p class="od">${esc(t.origName)} → ${esc(t.destName)}</p>
@@ -759,6 +837,34 @@ function nextStop(t) {
   return t.stations.find((s) => s.status !== "Departed") ?? null;
 }
 
+// One end of the side view's stop row: the name shrinks with an ellipsis, the time never does,
+// and the time is left out when the API has none for that stop.
+function stageStop(stop, kind) {
+  if (!stop) return `<span class="stop ${kind}"></span>`;
+  const iso = kind === "last" ? stop.dep || stop.arr : stop.arr || stop.dep;
+  const time = fmtClock(Date.parse(iso), stop.tz);
+  const name = `<span class="name">${esc(stop.name)}</span>`;
+  const when = time ? `<span class="time">· ${time}</span>` : "";
+  return kind === "last" ? `<span class="stop last">◀ ${name}${when}</span>` : `<span class="stop upcoming">${name}${when} ▶</span>`;
+}
+
+// The stop a train is standing at (if any), the one it last left and the one it's heading for.
+// "At" means the API says it's in the station, or it's stopped within 800 m of its next stop.
+function stopContext(t, moving) {
+  const stops = t.stations;
+  const nextIdx = stops.findIndex((s) => s.status !== "Departed");
+  let atIdx = stops.findIndex((s) => s.status === "Station");
+  if (atIdx < 0 && !moving && nextIdx >= 0) {
+    const st = state.stations[stops[nextIdx].code];
+    const pos = trainPosition(t);
+    const metres = st ? Math.hypot((st.lon - pos.lon) * 111_320 * Math.cos((pos.lat * Math.PI) / 180), (st.lat - pos.lat) * 110_540) : Infinity;
+    if (metres < 800) atIdx = nextIdx;
+  }
+  if (atIdx >= 0) return { at: stops[atIdx], last: stops[atIdx - 1] ?? null, upcoming: stops[atIdx + 1] ?? null };
+  const lastIdx = nextIdx < 0 ? stops.length - 1 : nextIdx - 1;
+  return { at: null, last: stops[lastIdx] ?? null, upcoming: nextIdx >= 0 ? stops[nextIdx] : null };
+}
+
 function timeliness(t) {
   if (t.trainState === "Predeparture") return { label: "Not departed" };
   const s = nextStop(t) ?? t.stations.at(-1);
@@ -786,6 +892,7 @@ function fmtTime(iso, tz) {
 }
 
 function fmtClock(ms, tz) {
+  if (!Number.isFinite(ms)) return "";
   try {
     return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", timeZone: tz });
   } catch {

@@ -16,6 +16,9 @@ const PALETTE = {
   R: "#ff4a3d", // tail light on
   r: "#6b2a26", // tail light off
   s: "#9aa3b2", // rail steel
+  o: "#9a5b3c", // station brick
+  p: "#4b2f27", // station roof
+  q: "#c9ccd3", // platform edge
   a: "#ffd84d", // direction arrow
   e: "#fff1a8", // headlight beam
   f: "#b9a75c", // beam falloff
@@ -172,7 +175,34 @@ function sideRows(state) {
   });
 }
 
-// Returns canvases keyed "side-<state>", "loco-<state>", "car-<state>", "car-tail-<state>".
+// Side-view station building drawn behind a stopped train. It is taller than the train so the
+// roof and upper windows show above it; rows are generated to keep every row the same width.
+const STATION_W = 52;
+function stationRows() {
+  const W = STATION_W;
+  const pad = (n) => ".".repeat(n);
+  const rows = [];
+  for (let i = 0; i < 5; i++) {
+    const off = 5 - i;
+    rows.push(pad(off) + "k" + "p".repeat(W - 2 * off - 2) + "k" + pad(off));
+  }
+  rows.push("k".repeat(W));
+  for (let y = 0; y < 18; y++) {
+    let row = "";
+    for (let x = 0; x < W; x++) {
+      const edge = x === 0 || x === W - 1;
+      const windowRow = (y >= 2 && y <= 6) || (y >= 10 && y <= 13);
+      const windowCol = x % 8 >= 3 && x % 8 <= 5 && x > 2 && x < W - 3;
+      const door = y >= 9 && Math.abs(x - W / 2 + 0.5) < 3;
+      row += edge ? "k" : door ? "n" : windowRow && windowCol ? (y === 2 || y === 10 ? "k" : "c") : "o";
+    }
+    rows.push(row);
+  }
+  rows.push("q".repeat(W));
+  return rows;
+}
+
+// Returns canvases keyed "side-<state>", "loco-<state>", "car-<state>", "car-tail-<state>", "station".
 export function buildSprites(scale = SCALE) {
   const sprites = {};
   for (const [state, f] of Object.entries(STATES)) {
@@ -182,6 +212,7 @@ export function buildSprites(scale = SCALE) {
     sprites[`car-${state}`] = rasterize(applyState(CAR_TOP, { ...f, T: "b" }), scale);
     sprites[`car-tail-${state}`] = rasterize(applyState(CAR_TOP, f), scale);
   }
+  sprites.station = rasterize(stationRows(), scale);
   return sprites;
 }
 
