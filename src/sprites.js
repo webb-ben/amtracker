@@ -126,7 +126,7 @@ function applyState(rows, f) {
   return rows.map((row) => row.replace(/[LTAB]/g, (ch) => f[ch]));
 }
 
-function rasterize(rows, scale = SCALE) {
+function rasterize(rows, scale = SCALE, palette = PALETTE) {
   const h = rows.length;
   const w = Math.max(...rows.map((r) => r.length));
   const canvas = document.createElement("canvas");
@@ -135,7 +135,7 @@ function rasterize(rows, scale = SCALE) {
   const ctx = canvas.getContext("2d");
   rows.forEach((row, y) => {
     for (let x = 0; x < row.length; x++) {
-      const color = PALETTE[row[x]];
+      const color = palette[row[x]];
       if (!color) continue;
       ctx.fillStyle = color;
       ctx.fillRect(x * scale, y * scale, scale, scale);
@@ -149,7 +149,8 @@ export const CARS = 2; // passenger cars in the side view
 // Map sprites are drawn one vehicle at a time so each can sit on the track at its own bearing.
 // Lengths are in art pixels (rows of the top-view grids), measured from the locomotive's nose.
 export const VEHICLE = {
-  locoCenter: (LOCO_TOP.length - ARROW.length) / 2, // loco image includes the arrow ahead of the nose
+  arrowCenter: -ARROW.length / 2, // the direction arrow is its own sprite, just ahead of the nose
+  locoCenter: LOCO_TOP.length / 2,
   locoLength: LOCO_TOP.length,
   carLength: CAR_TOP.length,
   gap: 1,
@@ -207,7 +208,7 @@ export function buildSprites(scale = SCALE) {
   const sprites = {};
   for (const [state, f] of Object.entries(STATES)) {
     sprites[`side-${state}`] = rasterize(sideRows(state), scale);
-    sprites[`loco-${state}`] = rasterize([...ARROW, ...applyState(LOCO_TOP, f)], scale);
+    sprites[`loco-${state}`] = rasterize(applyState(LOCO_TOP, f), scale);
     // Only the last car shows tail lights.
     sprites[`car-${state}`] = rasterize(applyState(CAR_TOP, { ...f, T: "b" }), scale);
     sprites[`car-tail-${state}`] = rasterize(applyState(CAR_TOP, f), scale);
@@ -220,7 +221,7 @@ export function spriteImageData(canvas) {
   return canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
 }
 
-// Direction arrow alone, used as the train head at low zoom.
-export function buildArrow(scale = SCALE) {
-  return rasterize(ARROW.slice(0, -1), scale);
+// Direction arrow on its own, filled with `color` (the app colours it by speed).
+export function buildArrow(color = PALETTE.a, scale = SCALE) {
+  return rasterize(ARROW.slice(0, -1), scale, { ...PALETTE, a: color });
 }

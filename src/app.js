@@ -26,7 +26,38 @@ maplibregl.addProtocol("pmtiles", protocol.tile);
 
 const sprites = buildSprites();
 const spriteUrls = Object.fromEntries(Object.entries(sprites).map(([k, c]) => [k, c.toDataURL()]));
-const arrow = buildArrow();
+
+// Direction arrows are coloured by the train's current speed on the heatmap ramp: one image per
+// 10 mph band, plus grey for stopped trains.
+const ARROW_STEP = 10;
+const arrows = { "arrow-stopped": buildArrow("#9aa3b2") };
+for (let mph = 0; mph <= SPEED_RAMP.at(-1)[0]; mph += ARROW_STEP) arrows[`arrow-${mph}`] = buildArrow(speedColor(mph));
+
+function arrowImage(t) {
+  const mph = t.velocity ?? 0;
+  if (mph <= 1) return "arrow-stopped";
+  return `arrow-${Math.min(SPEED_RAMP.at(-1)[0], Math.round(mph / ARROW_STEP) * ARROW_STEP)}`;
+}
+
+// Interpolated hex colour for a speed, matching the heatmap's line-color expression.
+function speedColor(mph) {
+  const i = SPEED_RAMP.findIndex(([stop]) => mph <= stop);
+  if (i <= 0) return SPEED_RAMP[i < 0 ? SPEED_RAMP.length - 1 : 0][1];
+  const [[m0, c0], [m1, c1]] = [SPEED_RAMP[i - 1], SPEED_RAMP[i]];
+  const u = (mph - m0) / (m1 - m0);
+  const rgb = (c) => [1, 3, 5].map((j) => parseInt(c.slice(j, j + 2), 16));
+  const [a, b] = [rgb(c0), rgb(c1)];
+  return (
+    "#" +
+    a
+      .map((v, j) =>
+        Math.round(v + (b[j] - v) * u)
+          .toString(16)
+          .padStart(2, "0"),
+      )
+      .join("")
+  );
+}
 
 const state = {
   trains: [], // flattened list of train objects
@@ -40,6 +71,7 @@ const state = {
   loaded: false, // first successful fetch applies ?train= / ?station=
   speed: null, // 30-day speed heatmap, fetched the first time it's switched on
   showSpeed: false,
+  showTrains: true,
   theme: preferredTheme(),
 };
 
@@ -74,7 +106,9 @@ function addOverlays() {
   map.addSource("corridors", { type: "geojson", data: state.routes });
   map.addSource("route", { type: "geojson", data: routeGeoJSON() });
   map.addSource("stations", { type: "geojson", data: stationsGeoJSON() });
-  if (!map.hasImage("arrow")) map.addImage("arrow", spriteImageData(arrow), { pixelRatio: SCALE / 1.5 });
+  for (const [id, canvas] of Object.entries(arrows)) {
+    if (!map.hasImage(id)) map.addImage(id, spriteImageData(canvas), { pixelRatio: SCALE / 1.5 });
+  }
 
   const { points, trails, vehicles } = trainFeatures();
   map.addSource("trains", { type: "geojson", data: points });
@@ -201,7 +235,7 @@ function addOverlays() {
     source: "trains",
     maxzoom: SPRITE_ZOOM,
     layout: {
-      "icon-image": "arrow",
+      "icon-image": ["get", "arrow"],
       "icon-rotate": ["get", "bearing"],
       "icon-rotation-alignment": "map",
       "icon-size": 0.55,
@@ -259,9 +293,15 @@ function addOverlays() {
       "text-halo-width": 3,
     },
   });
+  applyTrainVisibility();
 }
 
 const TRAIN_LAYERS = ["train-vehicles", "trains", "train-heads", "train-trail-casing"];
+const TRAIN_DRAW_LAYERS = ["train-trail-casing", "train-trail", "train-trail-stripe", "train-heads", "train-vehicles", "trains"];
+
+function applyTrainVisibility() {
+  for (const id of TRAIN_DRAW_LAYERS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", state.showTrains ? "visible" : "none");
+}
 for (const layer of [...TRAIN_LAYERS, "stations"]) {
   map.on("mouseenter", layer, () => (map.getCanvas().style.cursor = "pointer"));
   map.on("mouseleave", layer, () => (map.getCanvas().style.cursor = ""));
@@ -359,6 +399,7 @@ function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties) {
     const p = plan ? positionAt(plan, now, rowsBehind * metersPerArtPx) : trainPosition(t, now);
     out.push({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: { ...properties, image, bearing: p.bearing } });
   };
+  place(properties.arrow, VEHICLE.arrowCenter);
   place(`loco-${state}`, VEHICLE.locoCenter);
   for (let i = 0; i < cars; i++) {
     const center = VEHICLE.locoLength + i * (VEHICLE.carLength + VEHICLE.gap) + VEHICLE.carLength / 2;
@@ -388,6 +429,7 @@ function trainFeatures() {
       bearing: pos.bearing,
       moving: (t.velocity ?? 0) > 1,
       selected: t.trainID === state.selectedId,
+      arrow: arrowImage(t),
     };
     points.push({ type: "Feature", geometry: { type: "Point", coordinates: [pos.lon, pos.lat] }, properties });
     if (!nearView(pos)) continue;
@@ -501,6 +543,16 @@ $("#theme-toggle").addEventListener("click", () => {
 });
 
 $("#panel-toggle").addEventListener("click", () => document.body.classList.toggle("panel-collapsed"));
+
+const trainsToggle = $("#trains-toggle");
+trainsToggle.addEventListener("change", () => setShowTrains(trainsToggle.checked));
+
+function setShowTrains(on) {
+  state.showTrains = on;
+  trainsToggle.checked = on;
+  setUrlParam("trains", on ? null : "0");
+  applyTrainVisibility();
+}
 
 const speedToggle = $("#speed-toggle");
 speedToggle.addEventListener("change", () => setSpeedHeatmap(speedToggle.checked));
@@ -635,6 +687,7 @@ function applyUrl() {
     if (t) selectTrain(t.trainID, { fit: !linkHasView });
   }
   if (params.get("speed") === "1") setSpeedHeatmap(true);
+  if (params.get("trains") === "0") setShowTrains(false);
   const station = params.get("station");
   if (station && state.stations[station.toUpperCase()]) showStation(station.toUpperCase());
 }
