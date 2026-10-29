@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges">
+  <!-- Pixel-art locomotive seen head on, in the map sprites' livery. -->
+  <g fill="#141a28">
+    <rect x="4" y="0" width="8" height="1" />
+    <rect x="3" y="1" width="10" height="1" />
+    <rect x="2" y="2" width="12" height="1" />
+    <rect x="1" y="3" width="14" height="9" />
+    <rect x="2" y="12" width="12" height="1" />
+  </g>
+  <rect x="4" y="1" width="8" height="1" fill="#b4bcc9" />
+  <rect x="3" y="2" width="10" height="1" fill="#2f5bc4" />
+  <rect x="2" y="3" width="12" height="9" fill="#2f5bc4" />
+  <!-- windshield with centre post and a glint -->
+  <rect x="3" y="3" width="10" height="3" fill="#86c3ee" />
+  <rect x="4" y="3" width="2" height="1" fill="#ffffff" />
+  <rect x="7" y="5" width="2" height="1" fill="#141a28" />
+  <!-- white band, headlights, red number plate, navy skirt -->
+  <rect x="2" y="7" width="12" height="1" fill="#e9edf3" />
+  <rect x="3" y="9" width="2" height="2" fill="#ffd84d" />
+  <rect x="11" y="9" width="2" height="2" fill="#ffd84d" />
+  <rect x="7" y="10" width="2" height="1" fill="#c8102e" />
+  <rect x="2" y="11" width="12" height="1" fill="#1a2c6b" />
+  <!-- bogies and rails running toward the viewer -->
+  <rect x="4" y="13" width="2" height="1" fill="#5a6273" />
+  <rect x="10" y="13" width="2" height="1" fill="#5a6273" />
+  <rect x="2" y="14" width="1" height="1" fill="#9aa3b2" />
+  <rect x="13" y="14" width="1" height="1" fill="#9aa3b2" />
+  <rect x="1" y="15" width="1" height="1" fill="#9aa3b2" />
+  <rect x="14" y="15" width="1" height="1" fill="#9aa3b2" />
+</svg>
