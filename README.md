@@ -3,7 +3,7 @@
 A live Amtrak train map in the spirit of [amtraker.com/map](https://amtraker.com/map), built with
 [MapLibre GL JS](https://maplibre.org) on an [Overture Maps](https://overturemaps.org) basemap.
 
-- **Basemap**: Overture `base`, `transportation` and `divisions` PMTiles, read straight from
+- **Basemap**: Overture `base` and `transportation` PMTiles, read straight from
   `tiles.overturemaps.org` (see `src/style.js`; bump `OVERTURE_RELEASE` for new releases). Active
   mainline is styled as freight rail unless Overture flags it passenger-only; abandoned and disused
   track is hidden. Overture's rail data starts at zoom 8.

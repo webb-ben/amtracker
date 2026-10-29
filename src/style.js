@@ -1,5 +1,5 @@
 // MapLibre style built entirely from Overture Maps PMTiles.
-// Layer and field names come from the Overture tile metadata (base, transportation, divisions).
+// Layer and field names come from the Overture tile metadata (base, transportation).
 
 export const OVERTURE_RELEASE = "2026-10-21.0";
 const TILES = `https://tiles.overturemaps.org/${OVERTURE_RELEASE}`;
@@ -13,8 +13,6 @@ const PALETTES = {
     grass: "#e8eddc",
     urban: "#ebe6dd",
     park: "#d8e8c8",
-    border: "#a59fae",
-    region: "#c8c2cf",
     road: "#ffffff",
     roadCase: "#ddd6cb",
     highway: "#fbe3b8",
@@ -24,7 +22,6 @@ const PALETTES = {
     freight: "#9a6440",
     label: "#3b3a40",
     labelHalo: "rgba(255,255,255,0.9)",
-    countryLabel: "#6b6575",
     waterLabel: "#5a7ea0",
   },
   dark: {
@@ -35,8 +32,6 @@ const PALETTES = {
     grass: "#1f2420",
     urban: "#22242a",
     park: "#1d2a1f",
-    border: "#5d5869",
-    region: "#3a3742",
     road: "#30333b",
     roadCase: "#1b1e24",
     highway: "#4a4235",
@@ -46,7 +41,6 @@ const PALETTES = {
     freight: "#a67a57",
     label: "#d6d6dc",
     labelHalo: "rgba(15,17,22,0.9)",
-    countryLabel: "#9d97a8",
     waterLabel: "#6d90b5",
   },
 };
@@ -73,7 +67,6 @@ export function buildStyle(theme = "light") {
     sources: {
       base: { type: "vector", url: `pmtiles://${TILES}/base.pmtiles`, attribution: '<a href="https://overturemaps.org">© Overture Maps Foundation</a>' },
       transportation: { type: "vector", url: `pmtiles://${TILES}/transportation.pmtiles` },
-      divisions: { type: "vector", url: `pmtiles://${TILES}/divisions.pmtiles` },
     },
     layers: [
       { id: "background", type: "background", paint: { "background-color": c.ocean } },
@@ -105,22 +98,6 @@ export function buildStyle(theme = "light") {
         filter: ["==", ["geometry-type"], "LineString"],
         minzoom: 8,
         paint: { "line-color": c.water, "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.5, 14, 2] },
-      },
-      {
-        id: "region-boundaries",
-        type: "line",
-        source: "divisions",
-        "source-layer": "division_boundary",
-        filter: ["==", ["get", "subtype"], "region"],
-        paint: { "line-color": c.region, "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.5, 10, 1.5], "line-dasharray": [3, 2] },
-      },
-      {
-        id: "country-boundaries",
-        type: "line",
-        source: "divisions",
-        "source-layer": "division_boundary",
-        filter: ["==", ["get", "subtype"], "country"],
-        paint: { "line-color": c.border, "line-width": ["interpolate", ["linear"], ["zoom"], 2, 0.7, 10, 2] },
       },
       {
         id: "roads-highway-case",
@@ -217,43 +194,6 @@ export function buildStyle(theme = "light") {
         ],
         layout: { "text-field": name, "text-font": ["Noto Sans Italic"], "text-size": 12, "text-max-width": 8 },
         paint: { "text-color": c.waterLabel, "text-halo-color": c.labelHalo, "text-halo-width": 1 },
-      },
-      {
-        id: "locality-labels",
-        type: "symbol",
-        source: "divisions",
-        "source-layer": "division",
-        filter: ["==", ["get", "subtype"], "locality"],
-        minzoom: 5,
-        layout: {
-          "text-field": name,
-          "text-font": ["Noto Sans Regular"],
-          "text-size": ["interpolate", ["linear"], ["zoom"], 5, 10, 12, 14],
-          "symbol-sort-key": ["-", 0, ["coalesce", ["get", "@prominence"], 0]],
-          "text-max-width": 8,
-        },
-        paint: { "text-color": c.label, "text-halo-color": c.labelHalo, "text-halo-width": 1.2 },
-      },
-      {
-        id: "region-labels",
-        type: "symbol",
-        source: "divisions",
-        "source-layer": "division",
-        filter: ["==", ["get", "subtype"], "region"],
-        minzoom: 3.5,
-        maxzoom: 7,
-        layout: { "text-field": name, "text-font": ["Noto Sans Regular"], "text-size": 11, "text-transform": "uppercase", "text-letter-spacing": 0.08, "text-max-width": 7 },
-        paint: { "text-color": c.countryLabel, "text-halo-color": c.labelHalo, "text-halo-width": 1 },
-      },
-      {
-        id: "country-labels",
-        type: "symbol",
-        source: "divisions",
-        "source-layer": "division",
-        filter: ["==", ["get", "subtype"], "country"],
-        maxzoom: 6,
-        layout: { "text-field": name, "text-font": ["Noto Sans Medium"], "text-size": 13, "text-transform": "uppercase", "text-letter-spacing": 0.1 },
-        paint: { "text-color": c.countryLabel, "text-halo-color": c.labelHalo, "text-halo-width": 1.2 },
       },
     ],
   };

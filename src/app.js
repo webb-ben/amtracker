@@ -155,6 +155,10 @@ const map = new maplibregl.Map({
   zoom: 3.6,
   minZoom: 2,
   maxZoom: 15,
+  // Overture tiles are detailed and heavy; keep only a screenful or so of them per source
+  // instead of MapLibre's default of five zoom levels' worth.
+  maxTileCacheSize: 30,
+  maxTileCacheZoomLevels: 1,
   hash: true,
   attributionControl: { compact: true, customAttribution: 'Train data <a href="https://amtraker.com">Amtraker</a>' },
 });
