@@ -5,8 +5,8 @@ import { planMotion, positionAt, trailAt } from "./motion.js";
 const API = "https://api-v3.amtraker.com/v3";
 const REFRESH_MS = 60_000;
 const MOTION_MS = 100; // how often extrapolated positions are redrawn
-const SPRITE_ZOOM = 7; // below this, trains are drawn as a slice of track instead of a sprite
-const CAR_ZOOMS = [9, 11.5, 12.5, 13.25, 14, 14.75]; // zoom at which the 1st, 2nd, … car is coupled on behind the loco
+const SPRITE_ZOOM = 8; // below this, trains are drawn as a slice of track instead of a sprite
+const CAR_ZOOMS = [10, 11.5, 12.5, 13.25, 14, 14.75]; // zoom at which the 1st, 2nd, … car is coupled on behind the loco
 const ICON_SIZE = [7, 0.6, 12, 0.95, 15, 1.6]; // [zoom, size, …] for vehicle sprites
 const TRAIL_PX = 26; // on-screen length of a low-zoom train
 

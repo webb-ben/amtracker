@@ -8,13 +8,13 @@ A live Amtrak train map in the spirit of [amtraker.com/map](https://amtraker.com
 - **Trains and stations**: the [Amtraker v3 API](https://api-v3.amtraker.com/v3/trains), refreshed every 60 s.
 - **Corridors and routes**: actual track geometry from Amtrak's GTFS `shapes.txt`, prebuilt into `data/`.
 - **Motion**: between refreshes each train is dead-reckoned along its track at its last reported
-  speed from its last position fix, holding at its next stop (`src/motion.js`). Below zoom 7 a
+  speed from its last position fix, holding at its next stop (`src/motion.js`). Below zoom 8 a
   train is drawn as a short slice of its own track so it bends with the rails.
 - **Stations**: click one for a departures/arrivals board.
 - **Sharing**: selecting a train puts `?train=<id>` in the URL (a bare train number works too);
   `?station=<code>` opens a station's board. The `#zoom/lat/lon` part is the map view.
 - **Sprites**: pixel-art locomotives and cars drawn from character grids in `src/sprites.js`; preview
-  them at `sprites.html`. From zoom 7 each vehicle is its own sprite placed on the track, and cars
+  them at `sprites.html`. From zoom 8 each vehicle is its own sprite placed on the track, and cars
   are coupled on as you zoom in.
 
 ## Run
