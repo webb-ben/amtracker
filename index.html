@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Amtracker Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+    <link rel="stylesheet" href="src/app.css" />
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script src="https://unpkg.com/pmtiles@3.2.1/dist/pmtiles.js"></script>
+  </head>
+  <body>
+    <div id="map"></div>
+
+    <aside id="panel">
+      <header>
+        <div class="brand">
+          <span class="logo" aria-hidden="true"></span>
+          <div>
+            <h1>Amtracker</h1>
+            <p id="status">Loading…</p>
+          </div>
+        </div>
+        <div class="tools">
+          <button id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
+          <button id="panel-toggle" title="Collapse panel" aria-label="Collapse panel">▾</button>
+        </div>
+      </header>
+      <div class="panel-body">
+        <div id="list-view">
+          <input id="search" type="search" placeholder="Search train #, route, or station" autocomplete="off" />
+          <div id="train-list"></div>
+        </div>
+        <div id="detail"></div>
+      </div>
+    </aside>
+
+    <div id="board" hidden></div>
+
+    <script type="module" src="src/app.js"></script>
+  </body>
+</html>
