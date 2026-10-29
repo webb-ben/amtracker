@@ -28,6 +28,11 @@ python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
+## Deploy
+
+Pushes to `main` publish the site to GitHub Pages via `.github/workflows/pages.yml`
+(it copies `index.html`, `sprites.html`, `src/` and `data/`; there is no build step).
+
 ## Refresh route data
 
 Amtrak's schedule changes a few times a year. Rebuild `data/routes.geojson` and
