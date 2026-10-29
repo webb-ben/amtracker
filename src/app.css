@@ -281,6 +281,21 @@ h1 {
   width: 300px;
   max-width: 94%;
   margin: 0 auto -2px;
+  container-type: inline-size;
+}
+/* Train number on the loco's white upper body, between the side windows and the cab
+   (side sprite: 132 art px wide, 14 tall; that panel spans columns ~99–121, rows 2–4). */
+.loco-number {
+  position: absolute;
+  z-index: 2;
+  left: 83%;
+  top: 25%;
+  transform: translate(-50%, -50%);
+  color: #c8102e;
+  font:
+    800 3cqw/1 system-ui,
+    sans-serif;
+  letter-spacing: 0.02em;
 }
 .train-wrap img {
   display: block;

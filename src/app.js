@@ -19,6 +19,8 @@ const SPEED_RAMP = [
   [100, "#f0f921"],
 ];
 
+const AMTRAK_RED = "#c8102e";
+
 const HEADING_DEG = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
 
 const protocol = new pmtiles.Protocol();
@@ -272,6 +274,24 @@ function addOverlays() {
       "symbol-z-order": "source",
     },
   });
+  // Train number painted on the locomotive in Amtrak red, once the loco is big enough to hold it.
+  map.addLayer({
+    id: "train-numbers",
+    type: "symbol",
+    source: "train-vehicles",
+    minzoom: 11,
+    filter: ["in", "loco-", ["get", "image"]],
+    layout: {
+      "text-field": ["get", "trainNum"],
+      "text-font": ["Noto Sans Medium"],
+      "text-size": ["interpolate", ["linear"], ["zoom"], 11, 7, 12, 8.5, 15, 15],
+      "text-rotate": ["get", "textRotate"],
+      "text-rotation-alignment": "map",
+      "text-allow-overlap": true,
+      "text-ignore-placement": true,
+    },
+    paint: { "text-color": AMTRAK_RED, "text-halo-color": "rgba(255,255,255,0.85)", "text-halo-width": 0.8 },
+  });
   // Train number label at the head.
   map.addLayer({
     id: "trains",
@@ -297,7 +317,7 @@ function addOverlays() {
 }
 
 const TRAIN_LAYERS = ["train-vehicles", "trains", "train-heads", "train-trail-casing"];
-const TRAIN_DRAW_LAYERS = ["train-trail-casing", "train-trail", "train-trail-stripe", "train-heads", "train-vehicles", "trains"];
+const TRAIN_DRAW_LAYERS = ["train-trail-casing", "train-trail", "train-trail-stripe", "train-heads", "train-vehicles", "train-numbers", "trains"];
 
 function applyTrainVisibility() {
   for (const id of TRAIN_DRAW_LAYERS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", state.showTrains ? "visible" : "none");
@@ -397,7 +417,9 @@ function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties) {
   const out = [];
   const place = (image, rowsBehind) => {
     const p = plan ? positionAt(plan, now, rowsBehind * metersPerArtPx) : trainPosition(t, now);
-    out.push({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: { ...properties, image, bearing: p.bearing } });
+    // Number painted along the loco roof, turned so it never reads upside down.
+    const textRotate = p.bearing <= 180 ? p.bearing - 90 : p.bearing + 90;
+    out.push({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: { ...properties, image, bearing: p.bearing, textRotate } });
   };
   place(properties.arrow, VEHICLE.arrowCenter);
   place(`loco-${state}`, VEHICLE.locoCenter);
@@ -734,6 +756,7 @@ function renderDetail() {
       <div class="train-wrap">
         ${stationArt}
         <img class="train" src="${spriteUrls[`side-${moving ? "move" : "idle"}`]}" alt="" />
+        <span class="loco-number">${esc(t.trainNum)}</span>
       </div>
       <div class="track${moving ? " moving" : ""}"></div>
       <div class="stage-stops">
