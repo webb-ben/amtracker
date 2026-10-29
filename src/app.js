@@ -26,13 +26,12 @@ const ARRIVING_M = 1500; // a moving train this close to its next stop is "now a
 const NUMBER_ZOOM = 11; // from here the train number is painted on the first car instead of labelled beside it
 const NUMBER_SIZE = [NUMBER_ZOOM, 10, 12, 12, 15, 21]; // [zoom, text size, …] for the painted number
 const LANES = [0, 1, -1, 2, -2, 3, -3]; // tried in order when trains overlap
-// Trains alone on their stretch of track are drawn full width; trains that would overlap
-// ("crowded") switch to narrow sprites and thinner trails so lanes can pack closer together.
-const CAR_PX = { full: 18, narrow: 12 }; // drawn car width in icon pixels (12 or 8 art px × 1.5)
-const LANE_ICON_PX = 14; // lane spacing for narrow sprites, in icon pixels (scaled by icon-size)
-const TRAIL_PX_WIDTH = { full: 7, narrow: 4 }; // low-zoom trail casing width
-const LANE_TRAIL_PX = 5; // lane spacing for narrow low-zoom trails, in screen pixels
-const NARROW_TEXT = 0.75; // painted-number size on narrow cars, relative to full width
+// Trains are drawn with the narrow sprites and thin trails so side-by-side lanes pack tightly.
+const CAR_PX = 12; // drawn car width in icon pixels (8 art px × 1.5)
+const LANE_ICON_PX = 14; // lane spacing for sprites, in icon pixels (scaled by icon-size)
+const TRAIL_PX_WIDTH = 4; // low-zoom trail casing width
+const LANE_TRAIL_PX = 5; // lane spacing for low-zoom trails, in screen pixels
+const NARROW_TEXT = 0.75; // painted-number size on the narrow cars, relative to NUMBER_SIZE
 const CROSSOVER_MS = 900; // time for one vehicle to move across to its new lane
 const CROSSOVER_STAGGER_MS = 220; // each following vehicle starts this much later
 const MAX_VEHICLES = 8; // loco + up to six cars (+ slack), bounds how long a crossover can run
@@ -323,13 +322,8 @@ function addOverlays() {
   const numberLayout = {
     "text-field": ["get", "trainNum"],
     "text-font": ["Noto Sans Medium"],
-    // Smaller on narrow (crowded) cars so the number still fits across them.
-    "text-size": [
-      "interpolate",
-      ["linear"],
-      ["zoom"],
-      ...[0, 2, 4].flatMap((i) => [NUMBER_SIZE[i], ["case", ["get", "crowded"], NUMBER_SIZE[i + 1] * NARROW_TEXT, NUMBER_SIZE[i + 1]]]),
-    ],
+    // Scaled down so the number fits across the narrow cars.
+    "text-size": ["interpolate", ["linear"], ["zoom"], ...NUMBER_SIZE.map((v, i) => (i % 2 ? v * NARROW_TEXT : v))],
     "text-rotate": ["get", "textRotate"],
     "text-rotation-alignment": "map",
     "text-offset": ["get", "textOffset"],
@@ -535,8 +529,8 @@ function numberSizeAt(zoom) {
 function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneAt) {
   const cars = carsAt(zoom);
   const metersPerArtPx = (SCALE / (SCALE / 1.5)) * iconSizeAt(zoom) * metersPerPx;
-  const numberSize = numberSizeAt(zoom) * (properties.crowded ? NARROW_TEXT : 1);
-  const suffix = properties.crowded ? "-narrow" : "";
+  const numberSize = numberSizeAt(zoom) * NARROW_TEXT;
+  const suffix = "-narrow";
   const state = (properties.moving ? "move" : "idle") + suffix;
   const out = [];
   const place = (image, rowsBehind, extra = {}, k = 0) => {
@@ -590,10 +584,6 @@ function laneProgress(anim, now, k) {
 // (a polyline through its cars, head first), so curved trains whose tails swing across a
 // neighbour are caught, and it adapts to zoom.
 //
-// First, any train that would touch another at full width is marked crowded; crowded trains
-// are drawn narrow and packed into closer lanes, while a train alone on its stretch keeps full
-// width on the centre track.
-//
 // Lanes are sticky: trains already holding a lane are placed before newcomers, so an arriving
 // train goes around a waiting one instead of shoving it aside. Incumbents on the centre track
 // go first and keep it; incumbents in a side lane try the centre again (to drift back once it
@@ -602,24 +592,8 @@ function laneProgress(anim, now, k) {
 function assignLanes(entries, zoom) {
   const sprite = zoom >= SPRITE_ZOOM;
   const scale = sprite ? iconSizeAt(zoom) : 1;
-  const widthOf = (crowded) => (sprite ? CAR_PX[crowded ? "narrow" : "full"] * scale : TRAIL_PX_WIDTH[crowded ? "narrow" : "full"]);
+  const width = sprite ? CAR_PX * scale : TRAIL_PX_WIDTH; // drawn train width in px
   const spacing = sprite ? LANE_ICON_PX * scale : LANE_TRAIL_PX;
-
-  const full = widthOf(false);
-  for (const e of entries) {
-    e.crowded = false;
-    const xs = e.path.map((p) => p[0]);
-    const ys = e.path.map((p) => p[1]);
-    e.box = [Math.min(...xs) - full, Math.min(...ys) - full, Math.max(...xs) + full, Math.max(...ys) + full];
-  }
-  for (let i = 0; i < entries.length; i++) {
-    for (let j = i + 1; j < entries.length; j++) {
-      const [a, b] = [entries[i], entries[j]];
-      if (a.box[0] > b.box[2] || b.box[0] > a.box[2] || a.box[1] > b.box[3] || b.box[1] > a.box[3]) continue;
-      if (polylineDistance(a.path, b.path) < full) a.crowded = b.crowded = true;
-    }
-  }
-
   const previous = state.lanes;
   const group = (e) => (!previous.has(e.t.trainID) ? 2 : previous.get(e.t.trainID) === 0 ? 0 : 1);
   entries.sort(
@@ -628,22 +602,20 @@ function assignLanes(entries, zoom) {
   const placed = [];
   state.lanes = new Map();
   for (const e of entries) {
-    const width = widthOf(e.crowded);
     const normals = rightNormals(e.path);
     const prior = previous.get(e.t.trainID);
-    const order = !e.crowded ? [0] : prior === undefined ? LANES : [0, prior, ...LANES.filter((l) => l !== 0 && l !== prior)];
-    e.lane = e.crowded ? (prior ?? 0) : 0;
+    const order = prior === undefined ? LANES : [0, prior, ...LANES.filter((l) => l !== 0 && l !== prior)];
+    e.lane = prior ?? 0;
     let path = e.path;
     for (const lane of order) {
       const shifted = e.path.map(([x, y], i) => [x + normals[i][0] * lane * spacing, y + normals[i][1] * lane * spacing]);
-      // Clearance is centre to centre: half of each train's drawn width.
-      if (placed.every((other) => polylineDistance(shifted, other.path) >= (width + other.width) / 2)) {
+      if (placed.every((other) => polylineDistance(shifted, other) >= width)) {
         e.lane = lane;
         path = shifted;
         break;
       }
     }
-    placed.push({ path, width });
+    placed.push(path);
     state.lanes.set(e.t.trainID, e.lane);
   }
 }
@@ -731,18 +703,21 @@ function trainFeatures() {
 
   let crossing = false;
   for (const e of entries) {
-    const { t, plan, metersPerPx, point, lane, crowded } = e;
+    const { t, plan, metersPerPx, point, lane } = e;
     const { laneAt, active } = laneTransition(t.trainID, lane, now);
     crossing ||= active;
     const head = laneAt(0);
-    const properties = { ...e.properties, crowded };
-    const arrow = properties.arrow && crowded ? `${properties.arrow}-narrow` : properties.arrow;
+    const properties = e.properties;
+    const arrow = properties.arrow && `${properties.arrow}-narrow`;
     point.properties = { ...properties, arrow, headOffset: [(head * LANE_TRAIL_PX) / HEAD_ICON_SIZE, 0] };
     if (zoom >= SPRITE_ZOOM) vehicles.push(...vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneAt));
     else if (plan) {
       const coords = trailAt(plan, now, TRAIL_PX * metersPerPx);
-      const trailWidth = TRAIL_PX_WIDTH[crowded ? "narrow" : "full"];
-      trails.push({ type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: { ...properties, lineOffset: head * LANE_TRAIL_PX, trailWidth } });
+      trails.push({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: coords },
+        properties: { ...properties, lineOffset: head * LANE_TRAIL_PX, trailWidth: TRAIL_PX_WIDTH },
+      });
     }
   }
   const fc = (features) => ({ type: "FeatureCollection", features });
