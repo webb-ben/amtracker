@@ -4,7 +4,9 @@ A live Amtrak train map in the spirit of [amtraker.com/map](https://amtraker.com
 [MapLibre GL JS](https://maplibre.org) on an [Overture Maps](https://overturemaps.org) basemap.
 
 - **Basemap**: Overture `base`, `transportation` and `divisions` PMTiles, read straight from
-  `tiles.overturemaps.org` (see `src/style.js`; bump `OVERTURE_RELEASE` for new releases).
+  `tiles.overturemaps.org` (see `src/style.js`; bump `OVERTURE_RELEASE` for new releases). Active
+  mainline is styled as freight rail unless Overture flags it passenger-only; abandoned and disused
+  track is hidden. Overture's rail data starts at zoom 8.
 - **Trains and stations**: the [Amtraker v3 API](https://api-v3.amtraker.com/v3/trains), refreshed every 60 s.
 - **Corridors and routes**: actual track geometry from Amtrak's GTFS `shapes.txt`, prebuilt into `data/`.
 - **Motion**: between refreshes each train is dead-reckoned along its track at its last reported
