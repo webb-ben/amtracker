@@ -283,19 +283,26 @@ h1 {
   margin: 0 auto -2px;
   container-type: inline-size;
 }
-/* Train number on the loco's white upper body, between the side windows and the cab
-   (side sprite: 132 art px wide, 14 tall; that panel spans columns ~99–121, rows 2–4). */
-.loco-number {
+/* Train number on the first car behind the loco, over its window band (side sprite: 132 art px
+   wide, 14 tall; that car spans columns 48–86, windows on rows 3–4). A white outline keeps it
+   readable over the blue. */
+.car-number {
   position: absolute;
   z-index: 2;
-  left: 83%;
-  top: 25%;
+  left: 51%;
+  top: 30%;
   transform: translate(-50%, -50%);
   color: #c8102e;
   font:
-    800 3cqw/1 system-ui,
+    900 4.6cqw/1 system-ui,
     sans-serif;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
+  -webkit-text-stroke: 0.25px #c8102e;
+  text-shadow:
+    -1px 0 #fff,
+    1px 0 #fff,
+    0 -1px #fff,
+    0 1px #fff;
 }
 .train-wrap img {
   display: block;

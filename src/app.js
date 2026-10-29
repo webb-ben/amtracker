@@ -20,6 +20,12 @@ const SPEED_RAMP = [
 ];
 
 const AMTRAK_RED = "#c8102e";
+const NUMBER_ZOOM = 11; // from here the train number is painted on the first car instead of labelled beside it
+const NUMBER_SIZE = [NUMBER_ZOOM, 10, 12, 12, 15, 21]; // [zoom, text size, …] for the painted number
+const LANES = [0, 1, -1, 2, -2, 3, -3]; // tried in order when trains overlap
+const LANE_ICON_PX = 22; // lane spacing for sprites, in icon pixels (scaled by icon-size); a car is 18 wide
+const LANE_TRAIL_PX = 8; // lane spacing for low-zoom track slices, in screen pixels
+const HEAD_ICON_SIZE = 0.55; // icon-size of the low-zoom direction arrow
 
 const HEADING_DEG = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
 
@@ -29,11 +35,14 @@ maplibregl.addProtocol("pmtiles", protocol.tile);
 const sprites = buildSprites();
 const spriteUrls = Object.fromEntries(Object.entries(sprites).map(([k, c]) => [k, c.toDataURL()]));
 
-// Direction arrows are coloured by the train's current speed on the heatmap ramp: one image per
-// 10 mph band, plus grey for stopped trains.
+// Direction arrows are coloured by the train's current speed on the heatmap ramp (one image per
+// 10 mph band) and stack more chevrons as it speeds up; a stopped train gets a flat grey bar.
 const ARROW_STEP = 10;
-const arrows = { "arrow-stopped": buildArrow("#9aa3b2") };
-for (let mph = 0; mph <= SPEED_RAMP.at(-1)[0]; mph += ARROW_STEP) arrows[`arrow-${mph}`] = buildArrow(speedColor(mph));
+const CHEVRON_MPH = [40, 70]; // a second chevron from 40 mph, a third from 70
+const arrows = { "arrow-stopped": buildArrow("#9aa3b2", 0) };
+for (let mph = 0; mph <= SPEED_RAMP.at(-1)[0]; mph += ARROW_STEP) {
+  arrows[`arrow-${mph}`] = buildArrow(speedColor(mph), 1 + CHEVRON_MPH.filter((m) => mph >= m).length);
+}
 
 function arrowImage(t) {
   const mph = t.velocity ?? 0;
@@ -213,7 +222,7 @@ function addOverlays() {
     source: "train-trails",
     maxzoom: SPRITE_ZOOM,
     layout: { "line-cap": "round", "line-join": "round" },
-    paint: { "line-color": "#141a28", "line-width": ["case", ["get", "selected"], 9, 7] },
+    paint: { "line-color": "#141a28", "line-width": ["case", ["get", "selected"], 9, 7], "line-offset": ["get", "lineOffset"] },
   });
   map.addLayer({
     id: "train-trail",
@@ -221,7 +230,7 @@ function addOverlays() {
     source: "train-trails",
     maxzoom: SPRITE_ZOOM,
     layout: { "line-cap": "round", "line-join": "round" },
-    paint: { "line-color": "#2f5bc4", "line-width": ["case", ["get", "selected"], 6, 4.5] },
+    paint: { "line-color": "#2f5bc4", "line-width": ["case", ["get", "selected"], 6, 4.5], "line-offset": ["get", "lineOffset"] },
   });
   map.addLayer({
     id: "train-trail-stripe",
@@ -229,7 +238,7 @@ function addOverlays() {
     source: "train-trails",
     maxzoom: SPRITE_ZOOM,
     layout: { "line-cap": "butt", "line-join": "round" },
-    paint: { "line-color": "#e9edf3", "line-width": 1.2 },
+    paint: { "line-color": "#e9edf3", "line-width": 1.2, "line-offset": ["get", "lineOffset"] },
   });
   map.addLayer({
     id: "train-heads",
@@ -240,7 +249,8 @@ function addOverlays() {
       "icon-image": ["get", "arrow"],
       "icon-rotate": ["get", "bearing"],
       "icon-rotation-alignment": "map",
-      "icon-size": 0.55,
+      "icon-size": HEAD_ICON_SIZE,
+      "icon-offset": ["get", "headOffset"],
       "icon-allow-overlap": true,
       "icon-ignore-placement": true,
       "text-field": ["get", "trainNum"],
@@ -268,36 +278,44 @@ function addOverlays() {
       "icon-rotate": ["get", "bearing"],
       "icon-rotation-alignment": "map",
       "icon-size": ["interpolate", ["linear"], ["zoom"], ...ICON_SIZE],
+      "icon-offset": ["get", "offset"],
       "icon-allow-overlap": true,
       "icon-ignore-placement": true,
       "symbol-sort-key": ["case", ["get", "selected"], 1, 0],
       "symbol-z-order": "source",
     },
   });
-  // Train number painted on the locomotive in Amtrak red, once the loco is big enough to hold it.
-  map.addLayer({
-    id: "train-numbers",
+  // Train number painted on the first car in Amtrak red, once the cars are big enough to hold it.
+  // The font server has no bold weight, so a white-outlined copy sits under a copy whose red halo
+  // thickens the strokes.
+  const numberLayout = {
+    "text-field": ["get", "trainNum"],
+    "text-font": ["Noto Sans Medium"],
+    "text-size": ["interpolate", ["linear"], ["zoom"], ...NUMBER_SIZE],
+    "text-rotate": ["get", "textRotate"],
+    "text-rotation-alignment": "map",
+    "text-offset": ["get", "textOffset"],
+    "text-allow-overlap": true,
+    "text-ignore-placement": true,
+  };
+  const numberLayer = (id, paint) => ({
+    id,
     type: "symbol",
     source: "train-vehicles",
-    minzoom: 11,
-    filter: ["in", "loco-", ["get", "image"]],
-    layout: {
-      "text-field": ["get", "trainNum"],
-      "text-font": ["Noto Sans Medium"],
-      "text-size": ["interpolate", ["linear"], ["zoom"], 11, 7, 12, 8.5, 15, 15],
-      "text-rotate": ["get", "textRotate"],
-      "text-rotation-alignment": "map",
-      "text-allow-overlap": true,
-      "text-ignore-placement": true,
-    },
-    paint: { "text-color": AMTRAK_RED, "text-halo-color": "rgba(255,255,255,0.85)", "text-halo-width": 0.8 },
+    minzoom: NUMBER_ZOOM,
+    filter: ["==", ["get", "numbered"], true],
+    layout: numberLayout,
+    paint,
   });
-  // Train number label at the head.
+  map.addLayer(numberLayer("train-numbers-outline", { "text-color": AMTRAK_RED, "text-halo-color": "rgba(255,255,255,0.9)", "text-halo-width": 1.6 }));
+  map.addLayer(numberLayer("train-numbers", { "text-color": AMTRAK_RED, "text-halo-color": AMTRAK_RED, "text-halo-width": 0.6 }));
+  // Train number label beside the train, until it's painted on the first car instead.
   map.addLayer({
     id: "trains",
     type: "symbol",
     source: "trains",
     minzoom: SPRITE_ZOOM,
+    maxzoom: NUMBER_ZOOM,
     layout: {
       "text-field": ["get", "trainNum"],
       "text-font": ["Noto Sans Medium"],
@@ -317,7 +335,7 @@ function addOverlays() {
 }
 
 const TRAIN_LAYERS = ["train-vehicles", "trains", "train-heads", "train-trail-casing"];
-const TRAIN_DRAW_LAYERS = ["train-trail-casing", "train-trail", "train-trail-stripe", "train-heads", "train-vehicles", "train-numbers", "trains"];
+const TRAIN_DRAW_LAYERS = ["train-trail-casing", "train-trail", "train-trail-stripe", "train-heads", "train-vehicles", "train-numbers-outline", "train-numbers", "trains"];
 
 function applyTrainVisibility() {
   for (const id of TRAIN_DRAW_LAYERS) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", state.showTrains ? "visible" : "none");
@@ -408,26 +426,85 @@ function iconSizeAt(zoom) {
   return ICON_SIZE.at(-1);
 }
 
+function carsAt(zoom) {
+  return CAR_ZOOMS.filter((z) => zoom >= z).length;
+}
+
+function numberSizeAt(zoom) {
+  const [z0, s0, z1, s1, z2, s2] = NUMBER_SIZE;
+  if (zoom <= z1) return s0 + (s1 - s0) * Math.max(0, (zoom - z0) / (z1 - z0));
+  return s1 + (s2 - s1) * Math.min(1, (zoom - z1) / (z2 - z1));
+}
+
 // Locomotive plus however many cars this zoom allows, each centred on the track `behind`
-// meters back from the nose so the consist follows curves.
-function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties) {
-  const cars = CAR_ZOOMS.filter((z) => zoom >= z).length;
+// meters back from the nose so the consist follows curves. `lane` shifts every vehicle sideways
+// (to the right of travel for positive lanes) so trains sharing a line look like they're on
+// parallel tracks; each vehicle shifts along its own bearing, so the shifted train still bends.
+function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, lane) {
+  const cars = carsAt(zoom);
   const metersPerArtPx = (SCALE / (SCALE / 1.5)) * iconSizeAt(zoom) * metersPerPx;
+  const lateralEm = (lane * LANE_ICON_PX * iconSizeAt(zoom)) / numberSizeAt(zoom);
   const state = properties.moving ? "move" : "idle";
   const out = [];
-  const place = (image, rowsBehind) => {
+  const place = (image, rowsBehind, extra = {}) => {
     const p = plan ? positionAt(plan, now, rowsBehind * metersPerArtPx) : trainPosition(t, now);
-    // Number painted along the loco roof, turned so it never reads upside down.
-    const textRotate = p.bearing <= 180 ? p.bearing - 90 : p.bearing + 90;
-    out.push({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: { ...properties, image, bearing: p.bearing, textRotate } });
+    // The number runs along the car, turned so it never reads upside down; its offset follows
+    // the text's own axes, which point to the left of travel when the text is flipped.
+    const flipped = p.bearing > 180;
+    const textRotate = flipped ? p.bearing + 90 : p.bearing - 90;
+    out.push({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [p.lon, p.lat] },
+      properties: { ...properties, ...extra, image, bearing: p.bearing, textRotate, offset: [lane * LANE_ICON_PX, 0], textOffset: [0, flipped ? -lateralEm : lateralEm] },
+    });
   };
   place(properties.arrow, VEHICLE.arrowCenter);
   place(`loco-${state}`, VEHICLE.locoCenter);
   for (let i = 0; i < cars; i++) {
     const center = VEHICLE.locoLength + i * (VEHICLE.carLength + VEHICLE.gap) + VEHICLE.carLength / 2;
-    place(i === cars - 1 ? `car-tail-${state}` : `car-${state}`, center);
+    place(i === cars - 1 ? `car-tail-${state}` : `car-${state}`, center, { numbered: i === 0 });
   }
   return out;
+}
+
+// Give overlapping trains different lanes. Works in screen space on each train's head-to-tail
+// segment, so it adapts to zoom; trains are taken in a fixed order (selected first, then by ID)
+// so lanes stay stable from frame to frame.
+function assignLanes(entries, zoom) {
+  const sprite = zoom >= SPRITE_ZOOM;
+  const width = sprite ? 18 * iconSizeAt(zoom) : 7; // drawn train width in px
+  const spacing = sprite ? LANE_ICON_PX * iconSizeAt(zoom) : LANE_TRAIL_PX;
+  const rotation = map.getBearing();
+  const placed = [];
+  entries.sort((a, b) => b.selected - a.selected || a.t.trainID.localeCompare(b.t.trainID));
+  for (const e of entries) {
+    const rad = ((e.pos.bearing - rotation) * Math.PI) / 180;
+    const right = [Math.cos(rad), Math.sin(rad)]; // screen y points down
+    const shifted = (lane) => e.seg.map(([x, y]) => [x + right[0] * lane * spacing, y + right[1] * lane * spacing]);
+    for (const lane of LANES) {
+      const seg = shifted(lane);
+      if (placed.every((o) => segmentDistance(seg, o.seg) >= width)) {
+        e.lane = lane;
+        placed.push({ seg });
+        break;
+      }
+    }
+    if (e.lane === undefined) {
+      e.lane = 0;
+      placed.push({ seg: e.seg });
+    }
+  }
+}
+
+function segmentDistance([a, b], [c, d]) {
+  const pointSeg = ([px, py], [ax, ay], [bx, by]) => {
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    const u = len2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
+    return Math.hypot(px - ax - u * dx, py - ay - u * dy);
+  };
+  return Math.min(pointSeg(a, c, d), pointSeg(b, c, d), pointSeg(c, a, b), pointSeg(d, a, b));
 }
 
 function trainFeatures() {
@@ -441,6 +518,8 @@ function trainFeatures() {
   const padX = (b.getEast() - b.getWest()) * 0.25;
   const padY = (b.getNorth() - b.getSouth()) * 0.25;
   const nearView = (p) => p.lon > b.getWest() - padX && p.lon < b.getEast() + padX && p.lat > b.getSouth() - padY && p.lat < b.getNorth() + padY;
+
+  const entries = [];
   for (const t of state.trains) {
     const pos = trainPosition(t, now);
     const properties = {
@@ -453,12 +532,25 @@ function trainFeatures() {
       selected: t.trainID === state.selectedId,
       arrow: arrowImage(t),
     };
-    points.push({ type: "Feature", geometry: { type: "Point", coordinates: [pos.lon, pos.lat] }, properties });
+    const point = { type: "Feature", geometry: { type: "Point", coordinates: [pos.lon, pos.lat] }, properties };
+    points.push(point);
     if (!nearView(pos)) continue;
     const plan = state.plans.get(t.trainID);
     const metersPerPx = (78271.517 * Math.cos((pos.lat * Math.PI) / 180)) / 2 ** zoom;
-    if (zoom >= SPRITE_ZOOM) vehicles.push(...vehicleFeatures(t, plan, now, zoom, metersPerPx, properties));
-    else if (plan) trails.push({ type: "Feature", geometry: { type: "LineString", coordinates: trailAt(plan, now, TRAIL_PX * metersPerPx) }, properties });
+    const lengthM = zoom >= SPRITE_ZOOM ? (VEHICLE.locoLength + carsAt(zoom) * (VEHICLE.carLength + VEHICLE.gap)) * 1.5 * iconSizeAt(zoom) * metersPerPx : TRAIL_PX * metersPerPx;
+    const tail = plan ? positionAt(plan, now, lengthM) : pos;
+    const seg = [map.project([pos.lon, pos.lat]), map.project([tail.lon, tail.lat])].map((p) => [p.x, p.y]);
+    entries.push({ t, pos, plan, metersPerPx, properties, point, seg, selected: properties.selected });
+  }
+  assignLanes(entries, zoom);
+
+  for (const { t, plan, metersPerPx, properties, point, lane } of entries) {
+    point.properties = { ...properties, headOffset: [(lane * LANE_TRAIL_PX) / HEAD_ICON_SIZE, 0] };
+    if (zoom >= SPRITE_ZOOM) vehicles.push(...vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, lane));
+    else if (plan) {
+      const coords = trailAt(plan, now, TRAIL_PX * metersPerPx);
+      trails.push({ type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: { ...properties, lineOffset: lane * LANE_TRAIL_PX } });
+    }
   }
   const fc = (features) => ({ type: "FeatureCollection", features });
   return { points: fc(points), trails: fc(trails), vehicles: fc(vehicles) };
@@ -756,7 +848,7 @@ function renderDetail() {
       <div class="train-wrap">
         ${stationArt}
         <img class="train" src="${spriteUrls[`side-${moving ? "move" : "idle"}`]}" alt="" />
-        <span class="loco-number">${esc(t.trainNum)}</span>
+        <span class="car-number">${esc(t.trainNum)}</span>
       </div>
       <div class="track${moving ? " moving" : ""}"></div>
       <div class="stage-stops">

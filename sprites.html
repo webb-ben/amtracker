@@ -48,8 +48,12 @@
     <h1>Train Sprite Sheet</h1>
     <div id="sheet"></div>
     <script type="module">
-      import { buildSprites } from "./src/sprites.js";
+      import { buildSprites, buildArrow } from "./src/sprites.js";
       const sprites = buildSprites();
+      sprites["arrow-0"] = buildArrow("#9aa3b2", 0);
+      sprites["arrow-1"] = buildArrow("#9c179e", 1);
+      sprites["arrow-2"] = buildArrow("#d8576b", 2);
+      sprites["arrow-3"] = buildArrow("#f89540", 3);
       const sheet = document.getElementById("sheet");
       const section = (title, items) => {
         sheet.insertAdjacentHTML("beforeend", `<h2>${title}</h2>`);
@@ -70,6 +74,12 @@
         ["loco-idle", "loco · stopped", 1],
         ["car-move", "car", 1],
         ["car-tail-move", "last car", 1],
+      ]);
+      section("Direction Arrow (colour follows speed)", [
+        ["arrow-0", "stopped", 1],
+        ["arrow-1", "< 40 mph", 1],
+        ["arrow-2", "40–70 mph", 1],
+        ["arrow-3", "70+ mph", 1],
       ]);
     </script>
   </body>

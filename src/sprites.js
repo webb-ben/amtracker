@@ -113,8 +113,31 @@ const CAR_SIDE = [
   "sssssssssssssssssssssssssssssssssssssss",
 ];
 
-// Direction arrow drawn ahead of the nose on the map sprite.
-const ARROW = [".....kk.....", "....kaak....", "...kaaaak...", "..kaakkaak..", ".kaak..kaak.", ".kkk....kkk.", "............"];
+// Direction indicator drawn ahead of the nose: stacked chevrons (more = faster), or a flat bar
+// when stopped. Every variant is padded to the same height with its base on the bottom row, so
+// it sits the same distance from the nose whichever is shown.
+const CHEVRON = [".....kk.....", "....kaak....", "...kaaaak...", "..kaakkaak..", ".kaak..kaak.", ".kkk....kkk."];
+const FLAT_BAR = [".kkkkkkkkkk.", ".kaaaaaaaak.", ".kkkkkkkkkk."];
+export const MAX_CHEVRONS = 3;
+const CHEVRON_STEP = 3; // rows between stacked chevrons
+const ARROW_ROWS = CHEVRON.length + CHEVRON_STEP * (MAX_CHEVRONS - 1);
+
+function arrowRows(chevrons) {
+  const blank = ".".repeat(CHEVRON[0].length);
+  const rows = Array(ARROW_ROWS).fill(blank);
+  if (!chevrons) {
+    rows.splice(ARROW_ROWS - FLAT_BAR.length, FLAT_BAR.length, ...FLAT_BAR);
+    return rows;
+  }
+  // Stack from the bottom up so the lowest chevron always sits on the base row.
+  for (let i = 0; i < chevrons; i++) {
+    const top = ARROW_ROWS - CHEVRON.length - i * CHEVRON_STEP;
+    CHEVRON.forEach((row, y) => {
+      rows[top + y] = [...row].map((ch, x) => (ch === "." ? rows[top + y][x] : ch)).join("");
+    });
+  }
+  return rows;
+}
 
 // Two static states. Placeholders: L = headlight, T = tail light, A/B = wheel hubs.
 const STATES = {
@@ -149,7 +172,7 @@ export const CARS = 2; // passenger cars in the side view
 // Map sprites are drawn one vehicle at a time so each can sit on the track at its own bearing.
 // Lengths are in art pixels (rows of the top-view grids), measured from the locomotive's nose.
 export const VEHICLE = {
-  arrowCenter: -ARROW.length / 2, // the direction arrow is its own sprite, just ahead of the nose
+  arrowCenter: -(ARROW_ROWS + 1) / 2, // the direction arrow is its own sprite, a row ahead of the nose
   locoCenter: LOCO_TOP.length / 2,
   locoLength: LOCO_TOP.length,
   carLength: CAR_TOP.length,
@@ -221,7 +244,8 @@ export function spriteImageData(canvas) {
   return canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
 }
 
-// Direction arrow on its own, filled with `color` (the app colours it by speed).
-export function buildArrow(color = PALETTE.a, scale = SCALE) {
-  return rasterize(ARROW.slice(0, -1), scale, { ...PALETTE, a: color });
+// Direction indicator filled with `color` (the app colours it by speed): `chevrons` stacked
+// chevrons, or a flat bar for 0.
+export function buildArrow(color = PALETTE.a, chevrons = 1, scale = SCALE) {
+  return rasterize(arrowRows(chevrons), scale, { ...PALETTE, a: color });
 }
