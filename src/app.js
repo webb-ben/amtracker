@@ -32,8 +32,8 @@ const LANE_ICON_PX = 14; // lane spacing for sprites, in icon pixels (scaled by 
 const TRAIL_PX_WIDTH = 4; // low-zoom trail casing width
 const LANE_TRAIL_PX = 5; // lane spacing for low-zoom trails, in screen pixels
 const NARROW_TEXT = 0.75; // painted-number size on the narrow cars, relative to NUMBER_SIZE
-const CROSSOVER_MS = 900; // time for one vehicle to move across to its new lane
-const CROSSOVER_STAGGER_MS = 220; // each following vehicle starts this much later
+const CROSSOVER_MS = 380; // time for one vehicle to move across to its new lane
+const CROSSOVER_STAGGER_MS = 380; // the next vehicle starts once the one ahead has finished: car by car
 const MAX_VEHICLES = 8; // loco + up to six cars (+ slack), bounds how long a crossover can run
 const HEAD_ICON_SIZE = 0.55; // icon-size of the low-zoom direction arrow
 
@@ -279,7 +279,7 @@ function addOverlays() {
       "icon-rotate": ["get", "bearing"],
       "icon-rotation-alignment": "map",
       "icon-size": HEAD_ICON_SIZE,
-      "icon-offset": ["get", "headOffset"],
+      "icon-offset": ["coalesce", ["get", "headOffset"], ["literal", [0, 0]]], // unset for trains outside the view
       "icon-allow-overlap": true,
       "icon-ignore-placement": true,
       "text-field": ["get", "trainNum"],
@@ -558,9 +558,9 @@ function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneAt) {
   return out;
 }
 
-// Lane changes play out like a crossover: the loco swings across first and each car follows a
-// beat later, easing over CROSSOVER_MS. Returns laneAt(k) for vehicle k (0 = loco) and whether
-// the crossover is still in progress.
+// Lane changes play out car by car, like a crossover: the loco swings across, then each car in
+// turn once the one ahead has finished, each easing over CROSSOVER_MS. Returns laneAt(k) for
+// vehicle k (0 = loco) and whether the crossover is still in progress.
 function laneTransition(id, lane, now) {
   let anim = state.laneAnims.get(id);
   if (!anim) {
@@ -1084,6 +1084,24 @@ function renderDetail() {
         })
         .join("")}
     </ol>`;
+  slideInChanges(t.trainID);
+}
+
+// The detail panel is re-rendered every few seconds; slide in (left to right) only the pieces
+// whose text actually changed since the last render of the same train.
+const SLIDE_TARGETS = [".motion-tag", ".station-sign", ".stage-stops .last", ".stage-stops .upcoming", ".facts dd"];
+let lastShown = { id: null, texts: [] };
+
+function slideInChanges(id) {
+  const els = SLIDE_TARGETS.flatMap((sel) => [...detailEl.querySelectorAll(sel)].map((el) => ({ key: sel, el })));
+  const texts = els.map(({ key, el }) => `${key}|${el.textContent}`);
+  if (lastShown.id === id) {
+    const previous = new Set(lastShown.texts);
+    els.forEach(({ el }, i) => {
+      if (!previous.has(texts[i])) el.classList.add("slide-in");
+    });
+  }
+  lastShown = { id, texts };
 }
 
 detailEl.addEventListener("click", (e) => {

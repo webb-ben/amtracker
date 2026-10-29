@@ -267,14 +267,19 @@ h1 {
 .sprite-stage {
   position: relative;
   margin: 8px 0 4px;
-  padding: 32px 0 0;
+  padding: 8px 0 0;
   border-radius: 10px;
   background: linear-gradient(180deg, #1b2440, #0f1422);
   overflow: hidden;
   text-align: center;
 }
-.sprite-stage.at-station {
-  padding-top: 64px;
+/* The tag has its own row, so the station roof and sign below can never run into it. The
+   station stands ~23 px above the train and its sign ~19 px above that (at the 300 px max). */
+.sprite-stage .train-wrap {
+  margin-top: 6px;
+}
+.sprite-stage.at-station .train-wrap {
+  margin-top: 48px;
 }
 .train-wrap {
   position: relative;
@@ -373,16 +378,35 @@ h1 {
     background-position: -14px 0;
   }
 }
+/* New information slides in from the left (see slideInChanges in app.js). */
+.slide-in {
+  animation: slide-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.station-sign.slide-in {
+  animation-name: slide-in-sign; /* keeps the sign's centring transform */
+}
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-14px);
+  }
+}
+@keyframes slide-in-sign {
+  from {
+    opacity: 0;
+    transform: translate(calc(-50% - 14px), -3px);
+  }
+}
 @media (prefers-reduced-motion: reduce) {
-  .track.moving {
+  .track.moving,
+  .slide-in {
     animation: none;
   }
 }
 .motion-tag {
-  position: absolute;
-  top: 8px;
-  left: 10px;
-  z-index: 2;
+  display: block;
+  width: fit-content;
+  margin-left: 10px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;

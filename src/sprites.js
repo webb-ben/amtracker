@@ -51,10 +51,10 @@ const LOCO_TOP = [
   "kbbbbbbbbbbk",
   ".kbnnnnnnbk.",
   "..kkkkkkkk..",
-  ".....kk.....",
 ];
 
 const CAR_TOP = [
+  "......k.....", // coupler: a single pixel linking this car to the vehicle ahead
   ".kkkkkkkkkk.",
   "kbbbbbbbbbbk",
   "kbggggggggbk",
@@ -175,8 +175,8 @@ export const VEHICLE = {
   arrowCenter: -(ARROW_ROWS + 1) / 2, // the direction arrow is its own sprite, a row ahead of the nose
   locoCenter: LOCO_TOP.length / 2,
   locoLength: LOCO_TOP.length,
-  carLength: CAR_TOP.length,
-  gap: 1,
+  carLength: CAR_TOP.length, // includes the coupler row at its front
+  gap: 0, // the coupler fills the space between vehicles
 };
 
 // Moving side views get speed streaks behind and a headlight beam ahead; stopped ones are
