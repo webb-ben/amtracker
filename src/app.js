@@ -29,6 +29,8 @@ const NUMBER_SIZE = [NUMBER_ZOOM, 10, 12, 12, 15, 21]; // [zoom, text size, …]
 // are right of travel), so they never cut across each other: two trains heading opposite ways
 // pass on opposite sides, like right-hand running.
 const LANES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+// Stopped trains never cross anything, so in a crowded station they pack in on either side.
+const PARKED_LANES = [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6];
 // Lanes are worked out as if the map were at this zoom, so a train keeps its lane while you
 // zoom instead of shuffling as on-screen distances shrink and grow.
 const LANE_REF_ZOOM = 14;
@@ -40,9 +42,9 @@ const LANE_TRAIL_PX = 5; // lane spacing for low-zoom trails, in screen pixels
 const NARROW_TEXT = 0.75; // painted-number size on the narrow cars, relative to NUMBER_SIZE
 // Crossovers, in art pixels along the train (a car is 21 rows, the loco 23).
 const SWITCH_ROWS = 18; // length of the crossover each vehicle runs through
-const SWITCH_TILT = 45; // degrees a vehicle angles toward the new track mid-crossover
-const SWITCH_MIN_ROWS_PER_S = 40; // slowest the switch point moves back along the train
+const SWITCH_STALL_ROWS_PER_S = 40; // how fast a crossover finishes once the train has stopped
 const TRAIN_ROWS = 23 + 6 * 21; // longest train (loco + six cars), bounds when a crossover is done
+const SETTLE_MS = 3000; // lanes snap into place (no crossovers) this long after the first draw
 const HEAD_ICON_SIZE = 0.55; // icon-size of the low-zoom direction arrow
 
 const HEADING_DEG = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
@@ -127,9 +129,11 @@ const state = {
   trainShapes: {}, // train number -> shape id
   shapeCoords: new Map(), // shape id -> [lon, lat][]
   plans: new Map(), // trainID -> dead-reckoning plan, rebuilt on every refresh
-  stationTracks: [], // rail lines around major stations, from data/station-tracks.geojson
+  stationTrackFeatures: [], // rail lines around major stations, from data/station-tracks.geojson
+  stationTracks: [], // one main track per station, built from those once the stations load
   lanes: new Map(), // trainID -> lane it was drawn in last frame, so lanes stick
   laneAnims: new Map(), // trainID -> { from, to, start } crossover between lanes
+  settleUntil: 0, // crossovers are skipped until this time, so the first layout just snaps
   crossing: false, // any crossover in progress (animate every frame)
   loaded: false, // first successful fetch applies ?train= / ?station=
   speed: null, // 30-day speed heatmap, fetched the first time it's switched on
@@ -468,7 +472,10 @@ async function refresh() {
       state.routes.features.length ? null : loadRoutes(),
     ]);
     const trains = await trainsRes.json();
-    if (stationsRes) state.stations = await stationsRes.json();
+    if (stationsRes) {
+      state.stations = await stationsRes.json();
+      state.stationTracks = stationSpines(state.stationTrackFeatures);
+    }
     state.trains = Object.values(trains)
       .flat()
       .filter((t) => Number.isFinite(t.lat) && Number.isFinite(t.lon));
@@ -496,9 +503,9 @@ async function loadRoutes() {
     console.warn("Route geometry unavailable; run scripts/build_routes.py", err);
   }
   try {
-    state.stationTracks = chainTracks((await fetch("data/station-tracks.geojson").then((r) => r.json())).features);
+    state.stationTrackFeatures = (await fetch("data/station-tracks.geojson").then((r) => r.json())).features;
   } catch {
-    state.stationTracks = []; // optional; built by `npm run station-tracks`
+    state.stationTrackFeatures = []; // optional; built by `npm run station-tracks`
   }
 }
 
@@ -506,22 +513,18 @@ function shapeFor(t) {
   return state.shapeCoords.get(state.trainShapes[t.trainNum]);
 }
 
-// Within a major station, the stored station tracks (scripts/build_station_tracks.mjs) take
-// priority over the train's GTFS route shape, which is a single centreline. Each train claims
-// its own station track, so trains standing side by side lie along separate real tracks rather
-// than all on the route's one line. Stopped trains claim first, then the rest by distance to
-// their nearest track.
+// Within a major station, the station's main track (see stationSpines) takes priority over the
+// train's GTFS route shape, so every train there runs along the same straight line and the
+// lanes stack them neatly side by side instead of each following a different shape.
 function buildPlans() {
-  const claims = new Map(); // station track -> [lon, lat] of trains already on it
-  const order = [...state.trains].sort((a, b) => isMoving(a) - isMoving(b));
-  state.plans = new Map(order.map((t) => [t.trainID, planFor(t, claims)]));
+  state.plans = new Map(state.trains.map((t) => [t.trainID, planFor(t)]));
 }
 
-function planFor(t, claims = new Map()) {
+function planFor(t) {
   const next = nextStop(t);
   const st = next && state.stations[next.code];
   const stop = st && Number.isFinite(st.lat) ? st : undefined;
-  const local = stationTrackFor(t, claims);
+  const local = stationTrackFor(t);
   if (local) {
     const plan = planMotion(t, local, stop, HEADING_DEG[t.heading]);
     if (plan.kind === "track") return plan;
@@ -529,34 +532,49 @@ function planFor(t, claims = new Map()) {
   return planMotion(t, shapeFor(t), stop, HEADING_DEG[t.heading]);
 }
 
-const STATION_TRACK_M = 150; // how far a train may be from a stored station track to use it
-const SHARED_TRACK_M = 400; // two trains closer than this along one track would overlap
+const STATION_TRACK_M = 250; // how far a train may be from a station's main track to use it
+const SPINE_CENTER_M = 200; // a station's main track must pass this close to the station
+const CHAIN_TURN = 0.15; // radians; sharper joins are turnouts, not the same track
 
-// Nearest station track to the train that no nearby train has claimed.
-function stationTrackFor(t, claims) {
-  const kx = 111_320 * Math.cos((t.lat * Math.PI) / 180);
-  const here = [t.lon * kx, t.lat * 110_540];
-  const candidates = [];
+// Distance (m) from a [lon, lat] point to a line.
+function distanceToLine([lon, lat], line) {
+  const kx = 111_320 * Math.cos((lat * Math.PI) / 180);
+  const here = [lon * kx, lat * 110_540];
+  let d = Infinity;
+  for (let i = 0; i < line.length - 1; i++) {
+    d = Math.min(d, segmentDistance(here, here, [line[i][0] * kx, line[i][1] * 110_540], [line[i + 1][0] * kx, line[i + 1][1] * 110_540]));
+  }
+  return d;
+}
+
+// Nearest station main track to the train, if it's at one of the stations.
+function stationTrackFor(t) {
+  let best = null;
   for (const track of state.stationTracks) {
-    let d = Infinity;
-    for (let i = 0; i < track.length - 1; i++) {
-      d = Math.min(d, segmentDistance(here, here, [track[i][0] * kx, track[i][1] * 110_540], [track[i + 1][0] * kx, track[i + 1][1] * 110_540]));
-    }
-    if (d < STATION_TRACK_M) candidates.push({ track, d });
+    const d = distanceToLine([t.lon, t.lat], track);
+    if (d < STATION_TRACK_M && (!best || d < best.d)) best = { track, d };
   }
-  candidates.sort((a, b) => a.d - b.d);
-  for (const { track } of candidates) {
-    const others = claims.get(track) ?? [];
-    if (others.every(([lon, lat]) => Math.hypot((lon - t.lon) * kx, (lat - t.lat) * 110_540) > SHARED_TRACK_M)) {
-      claims.set(track, [...others, [t.lon, t.lat]]);
-      return track;
-    }
+  return best?.track ?? null;
+}
+
+// One main track per station: the longest straight run of chained track passing by the station.
+function stationSpines(features) {
+  const byStation = Map.groupBy(features, (f) => f.properties.station);
+  const spines = [];
+  for (const [code, group] of byStation) {
+    const st = state.stations[code];
+    if (!st) continue;
+    const center = [st.lon, st.lat];
+    const length = (line) => line.slice(1).reduce((sum, c, i) => sum + Math.hypot((c[0] - line[i][0]) * Math.cos((c[1] * Math.PI) / 180), c[1] - line[i][1]), 0);
+    const through = chainTracks(group).filter((line) => distanceToLine(center, line) < SPINE_CENTER_M);
+    const spine = through.sort((a, b) => length(b) - length(a))[0];
+    if (spine) spines.push(spine);
   }
-  return null;
+  return spines;
 }
 
 // The extracted station tracks arrive as short pieces (Overture segments, cut at tile edges).
-// Join pieces that meet end to end and carry on in roughly the same direction, so a train has
+// Join pieces that meet end to end and carry on in nearly the same direction, so a train has
 // a continuous track through the station instead of running off the end of a 50 m stub.
 function chainTracks(features) {
   const key = ([lon, lat]) => `${lon.toFixed(5)},${lat.toFixed(5)}`;
@@ -581,7 +599,7 @@ function chainTracks(features) {
         if (used.has(j)) continue;
         const p = key(pieces[j][0]) === key(tip) ? pieces[j] : [...pieces[j]].reverse();
         const turn = Math.abs(((heading(p[0], p[1]) - dir + 3 * Math.PI) % (2 * Math.PI)) - Math.PI);
-        if (turn < 0.5 && (!best || turn < best.turn)) best = { j, p, turn };
+        if (turn < CHAIN_TURN && (!best || turn < best.turn)) best = { j, p, turn };
       }
       if (!best) return line;
       used.add(best.j);
@@ -626,7 +644,8 @@ function numberSizeAt(zoom) {
 // meters back from the nose so the consist follows curves. `lane` shifts every vehicle sideways
 // (to the right of travel for positive lanes) so trains sharing a line look like they're on
 // parallel tracks; each vehicle shifts along its own bearing, so the shifted train still bends.
-// `laneAt(k)` gives the (possibly mid-crossover) lane of the k-th vehicle from the front.
+// `laneAt(front, length)` lays out a vehicle from its front end (art px behind the nose),
+// giving its (possibly mid-crossover) lane, tilt and where its rear end lands.
 function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneAt) {
   const cars = carsAt(zoom);
   const metersPerArtPx = (SCALE / (SCALE / 1.5)) * iconSizeAt(zoom) * metersPerPx;
@@ -634,9 +653,18 @@ function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneAt) {
   const suffix = "-narrow";
   const state = (properties.moving ? "move" : "idle") + suffix;
   const out = [];
-  const place = (image, rowsBehind, extra = {}, k = 0) => {
-    const { lane, tilt } = laneAt(k, rowsBehind);
-    const lateralEm = (lane * LANE_ICON_PX * iconSizeAt(zoom)) / numberSize;
+  // Vehicles are laid out nose to tail; mid-crossover a tilted vehicle covers less track, so
+  // the next one starts where this one's rear really is and the couplers stay together.
+  let front = 0;
+  const place = (image, length, extra = {}) => {
+    const { lane, tilt, center, rear } = laneAt(front, length);
+    const rowsBehind = center;
+    // Offsets are in the vehicle's own (tilted) axes; turn them back so the shift stays square
+    // to the track and a tilted car doesn't slide along it.
+    const rad = (tilt * Math.PI) / 180;
+    const across = lane * LANE_ICON_PX * Math.cos(rad);
+    const ahead = lane * LANE_ICON_PX * Math.sin(rad);
+    const em = iconSizeAt(zoom) / numberSize;
     const onTrack = plan ? positionAt(plan, now, rowsBehind * metersPerArtPx) : trainPosition(t, now);
     const p = { ...onTrack, bearing: (onTrack.bearing + tilt + 360) % 360 };
     // The number runs along the car, turned so it never reads upside down. Near-vertical text
@@ -648,61 +676,69 @@ function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneAt) {
     out.push({
       type: "Feature",
       geometry: { type: "Point", coordinates: [p.lon, p.lat] },
-      properties: { ...properties, ...extra, image, bearing: p.bearing, textRotate, offset: [lane * LANE_ICON_PX, 0], textOffset: [0, flipped ? -lateralEm : lateralEm] },
+      properties: { ...properties, ...extra, image, bearing: p.bearing, textRotate, offset: [across, -ahead], textOffset: flipped ? [-ahead * em, -across * em] : [ahead * em, across * em] },
     });
+    front = rear;
   };
   // Headlight beam (dark mode only draws it) starts right at the nose of the cab.
-  // Vehicle indexes: loco 0, cars 1–6, then the arrow and headlight, which cross with the nose.
-  if (properties.moving) place("headlight", 0, {}, 8);
-  if (properties.arrow) place(properties.arrow + suffix, VEHICLE.arrowCenter, {}, 7);
-  place(`loco-${state}`, VEHICLE.locoCenter);
+  if (properties.moving) place("headlight", 0);
+  place(`loco-${state}`, VEHICLE.locoLength);
   for (let i = 0; i < cars; i++) {
-    const center = VEHICLE.locoLength + i * (VEHICLE.carLength + VEHICLE.gap) + VEHICLE.carLength / 2;
-    place(i === cars - 1 ? `car-tail-${state}` : `car-${state}`, center, { numbered: i === 0 }, i + 1);
+    front += VEHICLE.gap;
+    place(i === cars - 1 ? `car-tail-${state}` : `car-${state}`, VEHICLE.carLength, { numbered: i === 0 });
   }
   return out;
 }
 
-// Lane changes play out like a real crossover: the switch sits where the nose was when the
-// change began, and each vehicle crosses over as it reaches that spot, angling up to 45° toward
-// the new track and straightening out again. Distances are in art pixels along the train
-// (rowsBehind), so every car switches at the same point. The switch point travels back along
-// the train at least SWITCH_MIN_ROWS_PER_S, so a slow or stopped train still finishes.
+// Lane changes play out like a real crossover. The switch sits where the nose was when the
+// change began, and the train runs through it: the lane is a smooth S-curve along the train
+// (lane(rows) for a point `rows` art px behind the nose), so the engine swings over first and
+// every car follows it through the same spot, each angled along the curve between its own ends
+// and still coupled to its neighbours. The switch point moves back along the train only as far
+// as the train actually travels (in art px at the current zoom, so zooming doesn't jump it); a
+// train held at a stop finishes at SWITCH_STALL_ROWS_PER_S. Only a moving train that was already
+// on screen starts one (i.e. one that ran into another train); on first load, when a train comes
+// into view, or for a stopped train, the lane just snaps.
 //
-// Returns laneAt(k, rows) -> { lane, tilt } for vehicle k centred `rows` behind the nose, and
-// whether the crossover is still in progress.
-function laneTransition(id, lane, now, plan, metersPerArtPx) {
+// Returns laneAt(front, length) -> { lane, tilt, center, rear } for a vehicle whose front end is
+// `front` art px behind the nose, and whether the crossover is still in progress.
+function laneTransition(id, lane, now, plan, metersPerArtPx, animate) {
   let anim = state.laneAnims.get(id);
-  if (!anim) {
-    anim = { from: [], rows: [], to: lane, start: 0, travel0: 0, done: true };
+  const travel = travelledAt(plan, now);
+  if (anim && !anim.done) {
+    // Advance the switch point by how far the train moved since last frame. A refresh rebuilds
+    // the plan (and restarts its travel), so that frame counts as no movement.
+    const moved = anim.plan === plan ? Math.max(0, travel - anim.travel) / metersPerArtPx : 0;
+    anim.switchAt += moved > 0 || anim.plan !== plan ? moved : ((now - anim.now) / 1000) * SWITCH_STALL_ROWS_PER_S;
+    Object.assign(anim, { plan, travel, now });
+    if (anim.switchAt > TRAIN_ROWS + SWITCH_ROWS) Object.assign(anim, { done: true, prev: null });
+  }
+  if (!anim || (anim.done && anim.to !== lane && !animate)) {
+    anim = { to: lane, done: true };
   } else if (anim.to !== lane) {
-    // Each vehicle starts from wherever it is now, so a new target mid-crossover doesn't jump.
-    const from = anim.rows.map((rows, k) => laneProgress(anim, now, plan, metersPerArtPx, k, rows).lane);
-    anim = { from, rows: [...anim.rows], to: lane, start: now, travel0: travelledAt(plan, now), done: false };
+    // A new target mid-crossover starts from the curve the train is on now, so nothing jumps.
+    anim = { prev: anim.done ? null : anim, from: anim.to, to: lane, switchAt: 0, plan, travel, now, done: false };
   }
   state.laneAnims.set(id, anim);
-  const laneAt = (k, rows) => {
-    anim.rows[k] = rows;
-    return laneProgress(anim, now, plan, metersPerArtPx, k, rows);
+  const laneAt = (front, length) => {
+    // Find the rear end so the vehicle keeps its length along the S-curve (a few fixed-point
+    // steps converge, since the lane changes slowly along the train).
+    const sideways = (a, b) => ((laneAlong(anim, a) - laneAlong(anim, b)) * LANE_ICON_PX) / 1.5; // art px
+    let rear = front + length;
+    for (let i = 0; i < 3; i++) rear = front + Math.sqrt(Math.max(0, length ** 2 - sideways(front, rear) ** 2));
+    const span = Math.max(rear - front, 1e-6);
+    const tilt = (Math.atan2(sideways(front, rear), span) * 180) / Math.PI;
+    return { lane: (laneAlong(anim, front) + laneAlong(anim, rear)) / 2, tilt, center: (front + rear) / 2, rear };
   };
-  if (!anim.done && switchRows(anim, now, plan, metersPerArtPx) > TRAIN_ROWS + SWITCH_ROWS) anim.done = true;
   return { laneAt, active: !anim.done };
 }
 
-// How far (art px) the switch point has moved back along the train since the change began.
-function switchRows(anim, now, plan, metersPerArtPx) {
-  const real = (travelledAt(plan, now) - anim.travel0) / metersPerArtPx;
-  return Math.max(real, ((now - anim.start) / 1000) * SWITCH_MIN_ROWS_PER_S);
-}
-
-function laneProgress(anim, now, plan, metersPerArtPx, k, rows) {
-  const from = anim.from[k] ?? anim.to;
-  if (anim.done || from === anim.to) return { lane: anim.to, tilt: 0 };
-  const u = Math.min(1, Math.max(0, (switchRows(anim, now, plan, metersPerArtPx) - rows) / SWITCH_ROWS));
-  const eased = u * u * (3 - 2 * u); // smoothstep
-  // Positive lanes are to the right of travel, so turning toward them is clockwise.
-  const tilt = Math.sign(anim.to - from) * SWITCH_TILT * Math.sin(Math.PI * u);
-  return { lane: from + (anim.to - from) * eased, tilt };
+// Lane at a point `rows` behind the nose. Positive lanes are to the right of travel.
+function laneAlong(anim, rows) {
+  if (anim.done) return anim.to;
+  const base = anim.prev ? laneAlong(anim.prev, rows) : anim.from;
+  const u = Math.min(1, Math.max(0, (anim.switchAt - rows) / SWITCH_ROWS));
+  return base + (anim.to - base) * u * u * (3 - 2 * u); // smoothstep
 }
 
 // Give overlapping trains different lanes. Works in screen space on each train's drawn path
@@ -737,17 +773,19 @@ function assignLanes(entries, zoom) {
     const prior = previous.get(e.t.trainID);
     // A stopped train stays put in the lane it already has; a moving one drifts back toward
     // the centre when it's free.
-    const order = prior === undefined ? LANES : parked(e) ? [prior, ...LANES.filter((l) => l !== prior)] : [0, prior, ...LANES.filter((l) => l !== 0 && l !== prior)];
+    const order = parked(e) ? [...(prior === undefined ? [] : [prior]), ...PARKED_LANES.filter((l) => l !== prior)] : prior === undefined ? LANES : [0, prior, ...LANES.filter((l) => l !== 0 && l !== prior)];
     const shiftedFor = (lane) => e.path.map(([x, y], i) => [x + normals[i][0] * lane * spacing, y + normals[i][1] * lane * spacing]);
     const clearanceCache = new Map();
     const clearanceOf = (lane) => {
       if (!clearanceCache.has(lane)) clearanceCache.set(lane, Math.min(Infinity, ...placed.map((other) => polylineDistance(shiftedFor(lane), other))));
       return clearanceCache.get(lane);
     };
-    // A train can't jump over another train's track: a lane only counts if every lane between
-    // where the train is now (or the centre, for a newcomer) and it is clear too.
+    // A moving train can't cross over another train's track: a lane only counts if every lane
+    // between where it is now and it is clear too. Stopped trains and newcomers just snap into
+    // place, so any free lane will do.
     const base = prior ?? 0;
     const reachable = (lane) => {
+      if (prior === undefined || parked(e)) return true;
       const [lo, hi] = lane > base ? [base + 1, lane - 1] : [lane + 1, base - 1];
       for (let l = lo; l <= hi; l++) if (clearanceOf(l) < width) return false;
       return true;
@@ -762,8 +800,7 @@ function assignLanes(entries, zoom) {
       if (clearance >= width) break;
     }
     e.lane = best.lane;
-    const path = shiftedFor(best.lane);
-    placed.push(path);
+    placed.push(shiftedFor(best.lane).slice(e.ahead)); // others avoid its body, not its look-ahead
     state.lanes.set(e.t.trainID, e.lane);
   }
 }
@@ -843,23 +880,29 @@ function trainFeatures() {
     const ref = LANE_REF_ZOOM;
     const refScale = 2 ** (ref - zoom);
     const lengthM = (VEHICLE.locoLength + carsAt(ref) * (VEHICLE.carLength + VEHICLE.gap)) * 1.5 * iconSizeAt(ref) * (metersPerPx / refScale);
+    // A moving train also looks one train length ahead of its nose, so it starts switching
+    // lanes before it reaches a train in its way rather than once they've collided.
     const samples = carsAt(ref) + 2;
-    const path = Array.from({ length: samples }, (_, i) => {
-      const p = plan ? positionAt(plan, now, (lengthM * i) / (samples - 1)) : pos;
+    const ahead = properties.moving && plan ? samples - 1 : 0;
+    const path = Array.from({ length: ahead + samples }, (_, i) => {
+      const p = plan ? positionAt(plan, now, (lengthM * (i - ahead)) / (samples - 1)) : pos;
       const s = map.project([p.lon, p.lat]);
       return [s.x * refScale, s.y * refScale];
     });
-    entries.push({ t, pos, plan, metersPerPx, properties, point, path });
+    entries.push({ t, pos, plan, metersPerPx, properties, point, path, ahead });
   }
+  const onScreen = new Set(state.lanes.keys()); // trains drawn last frame
   assignLanes(entries, LANE_REF_ZOOM);
+  if (!state.settleUntil && entries.length) state.settleUntil = now + SETTLE_MS;
 
   let crossing = false;
   for (const e of entries) {
     const { t, plan, metersPerPx, point, lane } = e;
+    const animate = e.properties.moving && onScreen.has(t.trainID) && now >= state.settleUntil;
     const metersPerArtPx = 1.5 * iconSizeAt(zoom) * metersPerPx;
-    const { laneAt, active } = laneTransition(t.trainID, lane, now, plan, metersPerArtPx);
+    const { laneAt, active } = laneTransition(t.trainID, lane, now, plan, metersPerArtPx, animate);
     crossing ||= active;
-    const head = laneAt(0, VEHICLE.locoCenter).lane;
+    const head = laneAt(0, VEHICLE.locoLength).lane;
     const properties = e.properties;
     const arrow = properties.arrow && `${properties.arrow}-narrow`;
     point.properties = { ...properties, arrow, headOffset: [(head * LANE_TRAIL_PX) / HEAD_ICON_SIZE, 0] };
