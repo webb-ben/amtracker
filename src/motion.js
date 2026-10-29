@@ -98,9 +98,20 @@ export function planMotion(train, coords, nextStop, compass) {
 
   // Hold at the next stop rather than running through it; a fresh fix will move it on.
   let limit = dir > 0 ? cum[cum.length - 1] : 0;
-  if (stop && stop.off < MAX_OFF_TRACK_M && (stop.along - here.along) * dir >= 0) limit = stop.along;
+  let holdsAtStop = false;
+  if (stop && stop.off < MAX_OFF_TRACK_M && (stop.along - here.along) * dir >= 0) {
+    limit = stop.along;
+    holdsAtStop = true;
+  }
 
-  return { kind: "track", coords, cum, along0: here.along, dir, limit, speed, t0 };
+  return { kind: "track", coords, cum, along0: here.along, dir, limit, holdsAtStop, speed, t0 };
+}
+
+/** True once dead reckoning has carried a moving train up to its next stop, where it holds. */
+export function hasArrived(plan, now) {
+  if (plan?.kind !== "track" || !plan.holdsAtStop || !plan.speed) return false;
+  const s = Math.min(Math.max(0, (now - plan.t0) / 1000), MAX_TRACK_S);
+  return plan.dir * (plan.along0 + plan.dir * plan.speed * s - plan.limit) >= 0;
 }
 
 /** Extrapolated {lon, lat, bearing} for a plan at time `now` (ms), `behind` meters back along the track. */

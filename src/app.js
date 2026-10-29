@@ -1,6 +1,6 @@
 import { buildStyle } from "./style.js";
 import { buildSprites, buildArrow, spriteImageData, SCALE, VEHICLE } from "./sprites.js";
-import { planMotion, positionAt, trailAt } from "./motion.js";
+import { planMotion, positionAt, trailAt, hasArrived } from "./motion.js";
 
 const API = "https://api-v3.amtraker.com/v3";
 const REFRESH_MS = 60_000;
@@ -62,7 +62,7 @@ for (const thin of [false, true]) {
 // Parked at a station: nothing in front of the train. Stopped elsewhere: a flat bar.
 function arrowImage(t) {
   const mph = t.velocity ?? 0;
-  if (mph <= 1) return stopContext(t, false).at ? null : "arrow-stopped";
+  if (!isMoving(t)) return stopContext(t, false).at ? null : "arrow-stopped";
   return `arrow-${Math.min(SPEED_RAMP.at(-1)[0], Math.round(mph / ARROW_STEP) * ARROW_STEP)}`;
 }
 
@@ -584,11 +584,12 @@ function laneProgress(anim, now, k) {
 // (a polyline through its cars, head first), so curved trains whose tails swing across a
 // neighbour are caught, and it adapts to zoom.
 //
-// Lanes are sticky: trains already holding a lane are placed before newcomers, so an arriving
-// train goes around a waiting one instead of shoving it aside. Incumbents on the centre track
-// go first and keep it; incumbents in a side lane try the centre again (to drift back once it
-// clears), then their old lane. Within each group moving trains go first, then the selected
-// train, then by ID.
+// Trains standing at a station are placed first, so they keep their track and moving trains
+// pass around them. After that lanes are sticky: trains already holding a lane are placed
+// before newcomers, so an arriving train goes around a waiting one instead of shoving it aside.
+// Incumbents on the centre track go first and keep it; incumbents in a side lane try the centre
+// again (to drift back once it clears), then their old lane. Within each group moving trains go
+// first, then the selected train, then by ID.
 function assignLanes(entries, zoom) {
   const sprite = zoom >= SPRITE_ZOOM;
   const scale = sprite ? iconSizeAt(zoom) : 1;
@@ -596,8 +597,14 @@ function assignLanes(entries, zoom) {
   const spacing = sprite ? LANE_ICON_PX * scale : LANE_TRAIL_PX;
   const previous = state.lanes;
   const group = (e) => (!previous.has(e.t.trainID) ? 2 : previous.get(e.t.trainID) === 0 ? 0 : 1);
+  const parked = (e) => !e.properties.moving && !e.properties.arrow; // no arrow = standing at a station
   entries.sort(
-    (a, b) => group(a) - group(b) || b.properties.moving - a.properties.moving || b.properties.selected - a.properties.selected || a.t.trainID.localeCompare(b.t.trainID),
+    (a, b) =>
+      parked(b) - parked(a) ||
+      group(a) - group(b) ||
+      b.properties.moving - a.properties.moving ||
+      b.properties.selected - a.properties.selected ||
+      a.t.trainID.localeCompare(b.t.trainID),
   );
   const placed = [];
   state.lanes = new Map();
@@ -679,7 +686,7 @@ function trainFeatures() {
       iconColor: t.iconColor || "#888",
       textColor: t.textColor || "#000",
       bearing: pos.bearing,
-      moving: (t.velocity ?? 0) > 1,
+      moving: isMoving(t, now),
       selected: t.trainID === state.selectedId,
       arrow: arrowImage(t),
       stale: (now - Date.parse(t.lastValTS)) / 60_000 >= STALE_MIN,
@@ -1006,7 +1013,8 @@ function renderDetail() {
     detailEl.innerHTML = `<button class="back" data-action="back">← All trains</button><p class="empty">This train is no longer reporting.</p>`;
     return;
   }
-  const moving = (t.velocity ?? 0) > 1;
+  const moving = isMoving(t);
+  const arrived = arrivedByReckoning(t);
   const status = timeliness(t);
   const next = nextStop(t);
   const { at, arriving, last, upcoming } = stopContext(t, moving);
@@ -1019,8 +1027,18 @@ function renderDetail() {
   // A fix older than STALE_MIN means the speed shown is a last-known value, not live.
   const fixAge = (Date.now() - Date.parse(t.lastValTS)) / 60_000;
   const stale = fixAge >= STALE_MIN;
-  const tag = stale ? `No update for ${fmtAge(fixAge)}` : arriving ? "Now arriving" : moving ? `Moving · ${Math.round(t.velocity)} mph` : at ? "At station" : "Stopped";
-  const tagClass = stale ? " stale" : arriving ? " arriving" : moving ? " moving" : "";
+  const tag = stale
+    ? `No update for ${fmtAge(fixAge)}`
+    : arriving
+      ? "Now arriving"
+      : moving
+        ? `Moving · ${Math.round(t.velocity)} mph`
+        : arrived && at
+          ? "Arrived"
+          : at
+            ? "At station"
+            : "Stopped";
+  const tagClass = stale ? " stale" : arriving || (arrived && at) ? " arriving" : moving ? " moving" : "";
   detailEl.innerHTML = `
     <button class="back" data-action="back">← All trains</button>
     <div class="sprite-stage${platform ? " at-station" : ""}">
@@ -1210,6 +1228,16 @@ function stageStop(stop, kind) {
 // The stop a train is standing at (if any), the one it last left and the one it's heading for.
 // "At" means the API says it's in the station, or it's stopped within 800 m of its next stop.
 // "Arriving" means it's still moving but in the station already or within ARRIVING_M of it.
+// A train counts as moving if it reported speed and dead reckoning hasn't yet carried it up to
+// its next stop; once it gets there it's treated as stopped (arrived) until a fresh fix.
+function isMoving(t, now = Date.now()) {
+  return (t.velocity ?? 0) > 1 && !arrivedByReckoning(t, now);
+}
+
+function arrivedByReckoning(t, now = Date.now()) {
+  return hasArrived(state.plans.get(t.trainID), now);
+}
+
 function stopContext(t, moving) {
   const stops = t.stations;
   const nextIdx = stops.findIndex((s) => s.status !== "Departed");
