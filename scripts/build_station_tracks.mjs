@@ -1,15 +1,17 @@
 // Extract the track layout around major Amtrak stations from Overture's transportation tiles.
 //
-// Writes data/station-tracks.geojson: active rail lines within RADIUS_M of each station. Reads
-// the same PMTiles archive the map uses, at its most detailed zoom, so it only downloads the
-// handful of tiles around each station.
+// Writes data/station-tracks.geojson: active rail lines within RADIUS_M of each station, cleaned
+// into a navigable network of the track Amtrak runs on (see clean_station_tracks.mjs). Reads the
+// same PMTiles archive the map uses, at its most detailed zoom, so it only downloads the handful
+// of tiles around each station.
 //
 // Usage: npm install && npm run station-tracks
 
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { PMTiles } from "pmtiles";
 import { VectorTile } from "@mapbox/vector-tile";
 import Pbf from "pbf";
+import { cleanTracks } from "./clean_station_tracks.mjs";
 
 const RELEASE = "2026-10-21.0"; // keep in step with OVERTURE_RELEASE in src/style.js
 const Z = 14; // most detailed zoom in the transportation archive
@@ -130,9 +132,13 @@ async function main() {
     console.log(`${code}: ${kept} track lines`);
   }
 
-  const out = JSON.stringify({ type: "FeatureCollection", metadata: { release: RELEASE, radius_m: RADIUS_M }, features });
+  const routes = JSON.parse(readFileSync(new URL("../data/routes.geojson", import.meta.url))).features;
+  const centers = Object.fromEntries(STATIONS.filter((code) => stations[code]).map((code) => [code, [stations[code].lon, stations[code].lat]]));
+  const cleaned = cleanTracks(features, routes, centers, RADIUS_M);
+  const metadata = { release: RELEASE, radius_m: RADIUS_M, stations: centers };
+  const out = JSON.stringify({ type: "FeatureCollection", metadata, features: cleaned });
   writeFileSync(OUT, out);
-  console.log(`${features.length} lines -> data/station-tracks.geojson (${Math.round(out.length / 1024)} KB)`);
+  console.log(`${features.length} raw lines, ${cleaned.length} cleaned -> data/station-tracks.geojson (${Math.round(out.length / 1024)} KB)`);
 }
 
 main();
