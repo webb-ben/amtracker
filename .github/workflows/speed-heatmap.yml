@@ -7,7 +7,8 @@ name: Collect train speeds
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    # Off the round minutes, which GitHub's scheduler is most likely to delay or drop.
+    - cron: "7-59/10 * * * *"
   workflow_dispatch:
 
 permissions:
