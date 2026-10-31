@@ -562,11 +562,29 @@ function stationSpines(features) {
     if (!st) continue;
     const center = [st.lon, st.lat];
     const length = (line) => line.slice(1).reduce((sum, c, i) => sum + Math.hypot((c[0] - line[i][0]) * Math.cos((c[1] * Math.PI) / 180), c[1] - line[i][1]), 0);
-    const through = chainTracks(group).filter((line) => distanceToLine(center, line) < SPINE_CENTER_M);
+    const through = chainTracks(group)
+      .flatMap(splitAtKinks)
+      .filter((line) => distanceToLine(center, line) < SPINE_CENTER_M);
     const spine = through.sort((a, b) => length(b) - length(a))[0];
     if (spine) spines.push(spine);
   }
   return spines;
+}
+
+// Some extracted pieces fold back on themselves (New York Penn's run east, back west for over a
+// kilometre, then east again), which would lay a train around a hairpin. Cut a line wherever it
+// turns sharper than KINK_TURN between one segment and the next.
+const KINK_TURN = Math.PI / 4;
+
+function splitAtKinks(line) {
+  const heading = (a, b) => Math.atan2((b[0] - a[0]) * Math.cos((a[1] * Math.PI) / 180), b[1] - a[1]);
+  const parts = [[line[0], line[1]]];
+  for (let i = 2; i < line.length; i++) {
+    const turn = Math.abs(((heading(line[i - 1], line[i]) - heading(line[i - 2], line[i - 1]) + 3 * Math.PI) % (2 * Math.PI)) - Math.PI);
+    if (turn > KINK_TURN) parts.push([line[i - 1]]);
+    parts.at(-1).push(line[i]);
+  }
+  return parts.filter((part) => part.length >= 2);
 }
 
 // The extracted station tracks arrive as short pieces (Overture segments, cut at tile edges).
