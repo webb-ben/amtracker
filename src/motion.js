@@ -124,6 +124,23 @@ export function hasArrived(plan, now) {
 }
 
 /**
+ * The stretch of `coords` between where points `a` and `b` ({lon, lat}) fall on it, or null when
+ * either is far from the line.
+ */
+export function sliceTrack(coords, a, b) {
+  if (!coords || coords.length < 2) return null;
+  const cum = cumulative(coords);
+  const [pa, pb] = [project(coords, cum, a.lon, a.lat), project(coords, cum, b.lon, b.lat)];
+  if (pa.off > MAX_OFF_TRACK_M || pb.off > MAX_OFF_TRACK_M) return null;
+  const [lo, hi] = pa.along <= pb.along ? [pa.along, pb.along] : [pb.along, pa.along];
+  const at = (along) => {
+    const p = pointAt(coords, cum, along);
+    return [p.lon, p.lat];
+  };
+  return [at(lo), ...coords.filter((_, i) => cum[i] > lo && cum[i] < hi), at(hi)];
+}
+
+/**
  * Meters along the track from the train's extrapolated position to where `point` ({lon, lat})
  * falls on it, positive ahead; null off a track or when the point is far from it.
  */

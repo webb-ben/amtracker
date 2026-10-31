@@ -13,6 +13,13 @@ A live Amtrak train map in the spirit of [amtraker.com/map](https://amtraker.com
   speed from its last position fix, holding at its next stop (`src/motion.js`). Below zoom 8 a
   train is drawn as a short slice of its own track so it bends with the rails.
 - **Stations**: click one for a departures/arrivals board.
+- **My trip**: "Track my trip on this train" in a train's details opens a trip view for the stop
+  you get on at and the one you get off at. It counts down to the train reaching your stop, then
+  to your arrival. Your leg of the route is highlighted, and the map follows the train until you
+  drag it. With "Use my location", your position is shown on the map, the trip says how far you
+  are from your station or train, and it picks the upcoming stop nearest you as the one you get
+  on at. The trip lives in the URL (`?trip=<train>&from=<code>&to=<code>`), is remembered on the
+  device ("Back to my trip" in the list), and keeps the screen awake where the browser allows.
 - **Sharing**: selecting a train puts `?train=<id>` in the URL (a bare train number works too);
   `?station=<code>` opens a station's board. The `#zoom/lat/lon` part is the map view.
 - **Sprites**: pixel-art locomotives and cars drawn from character grids in `src/sprites.js`; preview

@@ -1,6 +1,6 @@
 import { buildStyle } from "./style.js";
 import { buildSprites, buildArrow, buildSpeedLoco, spriteImageData, SCALE, VEHICLE } from "./sprites.js";
-import { planMotion, positionAt, trailAt, hasArrived, travelledAt, metersAheadTo } from "./motion.js";
+import { planMotion, positionAt, trailAt, hasArrived, travelledAt, metersAheadTo, sliceTrack } from "./motion.js";
 import { animateIcon } from "./icon.js";
 
 const API = "https://api-v3.amtraker.com/v3";
@@ -128,6 +128,9 @@ const state = {
   speedPeriod: "", // heatmap time of day: "" all day, or "0".."5" (see SPEED_PERIODS)
   showTrains: true,
   theme: preferredTheme(),
+  trip: null, // { trainID, from, to, follow, fromAuto, editing } while tracking a trip (see "My trip")
+  me: null, // { lon, lat } from the browser while a trip uses your location
+  meError: null,
 };
 
 // A shared link may carry its own view (#zoom/lat/lon); read this before MapLibre writes a default.
@@ -239,12 +242,42 @@ function addOverlays() {
     },
     "water-labels",
   );
+  // Your leg of a tracked trip, bolder than the rest of the route (which fades; see applyTripStyle).
+  map.addSource("trip-leg", { type: "geojson", data: tripLegGeoJSON() });
+  map.addLayer(
+    {
+      id: "trip-leg-casing",
+      type: "line",
+      source: "trip-leg",
+      layout: { "line-join": "round", "line-cap": "round" },
+      paint: { "line-color": dark ? "#0f1116" : "#ffffff", "line-width": ["interpolate", ["linear"], ["zoom"], 3, 8, 12, 14] },
+    },
+    "water-labels",
+  );
+  map.addLayer(
+    {
+      id: "trip-leg",
+      type: "line",
+      source: "trip-leg",
+      layout: { "line-join": "round", "line-cap": "round" },
+      paint: { "line-color": accent, "line-width": ["interpolate", ["linear"], ["zoom"], 3, 5, 12, 9] },
+    },
+    "water-labels",
+  );
   map.addLayer({
     id: "stations",
     type: "circle",
     source: "stations",
     paint: {
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, ["case", ["get", "onRoute"], 4, 1.6], 10, ["case", ["get", "onRoute"], 7, 5]],
+      "circle-radius": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        3,
+        ["case", ["get", "tripEnd"], 6, ["get", "onRoute"], 4, 1.6],
+        10,
+        ["case", ["get", "tripEnd"], 10, ["get", "onRoute"], 7, 5],
+      ],
       "circle-color": ["case", ["get", "onRoute"], ["get", "stopColor"], dark ? "#cfd3dc" : "#ffffff"],
       "circle-stroke-color": dark ? "#0f1116" : "#2b2f3a",
       "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 3, 0.6, 10, 1.5],
@@ -393,7 +426,17 @@ function addOverlays() {
       "text-halo-width": 3,
     },
   });
+  // You, while a trip uses your location: on top of everything.
+  map.addSource("me", { type: "geojson", data: meGeoJSON() });
+  map.addLayer({ id: "me-halo", type: "circle", source: "me", paint: { "circle-radius": 16, "circle-color": "#1a73e8", "circle-opacity": 0.18 } });
+  map.addLayer({
+    id: "me",
+    type: "circle",
+    source: "me",
+    paint: { "circle-radius": 7, "circle-color": "#1a73e8", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2.5 },
+  });
   applyTrainVisibility();
+  applyTripStyle();
 }
 
 const TRAIN_LAYERS = ["train-vehicles", "trains", "train-heads", "train-trail-casing"];
@@ -1045,6 +1088,7 @@ function stationsGeoJSON() {
           code: s.code,
           name: s.name,
           onRoute: onRoute.has(s.code),
+          tripEnd: !!state.trip && (s.code === state.trip.from || s.code === state.trip.to),
           stopColor: onRoute.get(s.code)?.stopIconColor || "#2f5bc4",
         },
       })),
@@ -1077,8 +1121,10 @@ function render() {
   updateTrains();
   map.getSource("stations")?.setData(stationsGeoJSON());
   map.getSource("route")?.setData(routeGeoJSON());
+  map.getSource("trip-leg")?.setData(tripLegGeoJSON());
   renderList();
-  if (state.selectedId) renderDetail();
+  if (state.trip) renderTrip();
+  else if (state.selectedId) renderDetail();
   if (boardCode) renderBoard();
 }
 
@@ -1097,16 +1143,17 @@ function animate(ts) {
     lastMotion = ts;
     zooming = false;
     updateTrains();
+    if (state.trip?.follow && !map.isEasing()) followTrain();
   }
   requestAnimationFrame(animate);
 }
 requestAnimationFrame(animate);
 map.on("zoom", () => (zooming = true));
-map.on("moveend", () => (lastMotion = 0)); // pick up trains panned into view
+map.on("moveend", (e) => !e.tripFollow && (lastMotion = 0)); // pick up trains panned into view
 
-// The side view depends on the extrapolated position (e.g. "Now arriving"), so refresh it
-// between API updates too.
-setInterval(() => state.selectedId && renderDetail(), 5_000);
+// The side view and the trip card depend on the extrapolated position (e.g. "Now arriving"),
+// so refresh them between API updates too.
+setInterval(() => (state.trip ? renderTrip() : state.selectedId && renderDetail()), 5_000);
 
 // ---------------------------------------------------------------------------
 // Panel
@@ -1245,9 +1292,11 @@ function renderList() {
     listEl.innerHTML = `<p class="empty">${state.trains.length ? "No trains match." : "Loading trains…"}</p>`;
     return;
   }
-  listEl.innerHTML = trains
-    .map(
-      (t) => `
+  listEl.innerHTML =
+    resumeTripRow() +
+    trains
+      .map(
+        (t) => `
       <button class="train-row${t.trainID === state.selectedId ? " active" : ""}" data-id="${esc(t.trainID)}">
         <span class="badge" style="background:${esc(t.iconColor)};color:${esc(t.textColor)}">${esc(t.trainNum)}</span>
         <span class="row-main">
@@ -1255,16 +1304,33 @@ function renderList() {
           <span class="row-sub">${esc(t.origCode)} → ${esc(t.destCode)} · ${esc(timeliness(t).label)}</span>
         </span>
       </button>`,
-    )
-    .join("");
+      )
+      .join("");
+}
+
+// The trip remembered on this device, while its train is still on the way to your stop.
+function resumeTripRow() {
+  const saved = savedTrip();
+  const t = saved && !state.trip && state.trains.find((x) => x.trainID === saved.trainID);
+  if (!t || !t.stations.some((s) => s.code === saved.from) || !t.stations.some((s) => s.code === saved.to)) return "";
+  if (tripStatus(t, saved).phase === "arrived") return "";
+  return `<button class="trip-resume" data-action="resume-trip">
+    <span class="badge" style="background:${esc(t.iconColor)};color:${esc(t.textColor)}">${esc(t.trainNum)}</span>
+    <span class="row-main"><span class="row-title">Back to my trip</span><span class="row-sub">${esc(saved.from)} → ${esc(saved.to)} · ${esc(t.routeName)}</span></span>
+  </button>`;
 }
 
 listEl.addEventListener("click", (e) => {
+  if (e.target.closest("[data-action=resume-trip]")) {
+    const { trainID, from, to } = savedTrip();
+    return startTrip(trainID, { from, to });
+  }
   const row = e.target.closest(".train-row");
   if (row) selectTrain(row.dataset.id, { fly: true });
 });
 
 function selectTrain(id, { fly = false, fit = false } = {}) {
+  if (state.trip && id !== state.trip.trainID) exitTrip(); // picking another train leaves the trip (it's remembered)
   state.selectedId = id;
   const t = selectedTrain();
   if (!t) return;
@@ -1301,11 +1367,13 @@ function setUrlParam(key, value) {
 
 function applyUrl() {
   const params = new URLSearchParams(location.search);
+  // Accept a full train ID ("66-29") or just a number ("66"); IDs roll over daily.
+  const findTrain = (wanted) => state.trains.find((x) => x.trainID === wanted) ?? state.trains.find((x) => x.trainNum === wanted.split("-")[0]);
+  const trip = params.get("trip") && findTrain(params.get("trip"));
   const wanted = params.get("train");
-  if (wanted) {
-    // Accept a full train ID ("66-29") or just a number ("66"); IDs roll over daily.
-    const num = wanted.split("-")[0];
-    const t = state.trains.find((x) => x.trainID === wanted) ?? state.trains.find((x) => x.trainNum === num);
+  if (trip) startTrip(trip.trainID, { from: params.get("from")?.toUpperCase(), to: params.get("to")?.toUpperCase() });
+  else if (wanted) {
+    const t = findTrain(wanted);
     if (t) selectTrain(t.trainID, { fit: !linkHasView });
   }
   const period = params.get("speedtime");
@@ -1317,13 +1385,14 @@ function applyUrl() {
 }
 
 async function copyLink(button) {
+  const label = button.textContent;
   try {
     await navigator.clipboard.writeText(location.href);
     button.textContent = "Link copied";
   } catch {
     button.textContent = "Copy the address bar";
   }
-  setTimeout(() => (button.textContent = "Share link"), 2000);
+  setTimeout(() => (button.textContent = label), 2000);
 }
 
 function renderDetail() {
@@ -1384,6 +1453,7 @@ function renderDetail() {
       <div><dt>Operator</dt><dd>${esc(t.provider ?? "Amtrak")}</dd></div>
       <div class="${stale ? "stale" : ""}"><dt>Last update</dt><dd>${Number.isFinite(fixAge) ? `${fmtAge(fixAge)} ago · ${fmtClock(Date.parse(t.lastValTS), t.eventTZ)}` : "—"}</dd></div>
     </dl>
+    <button class="trip-start" data-action="trip">Track my trip on this train</button>
     <div class="links">
       <a href="https://amtraker.com/trains/${encodeURIComponent(t.trainNum)}/${encodeURIComponent(t.trainID.split("-")[1] ?? "")}" target="_blank" rel="noopener">Amtraker ↗</a>
       <button class="share" data-action="share">Share link</button>
@@ -1427,6 +1497,7 @@ function slideInChanges(id) {
 
 detailEl.addEventListener("click", (e) => {
   if (e.target.closest("[data-action=back]")) return clearSelection();
+  if (e.target.closest("[data-action=trip]")) return startTrip(state.selectedId);
   const share = e.target.closest("[data-action=share]");
   if (share) return copyLink(share);
   const li = e.target.closest("li[data-code]");
@@ -1545,6 +1616,392 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !boardEl.hidden) closeBoard();
 });
 setInterval(() => !boardEl.hidden && renderBoard(), 15_000);
+
+// ---------------------------------------------------------------------------
+// My trip: one train from the stop you get on at to the stop you get off at, with the map
+// following the train. It lives in the URL (?trip=<train>&from=<code>&to=<code>) and is
+// remembered on this device, so a reload or a bookmark picks it straight back up.
+
+const tripEl = $("#trip");
+const TRIP_ZOOM = 13;
+const AT_STATION_M = 200; // you're "at the station" this close to it
+const ON_BOARD_M = 400; // and "on the train" this close to it once it's left your stop
+const NEAR_STOP_M = 5_000; // a location fix this close to an upcoming stop picks it as yours
+let wakeLock = null;
+let locationWatch = null;
+
+function tripTrain() {
+  return state.trip ? state.trains.find((t) => t.trainID === state.trip.trainID) : undefined;
+}
+
+function startTrip(trainID, { from, to } = {}) {
+  const t = state.trains.find((x) => x.trainID === trainID);
+  if (!t) return;
+  const codes = t.stations.map((s) => s.code);
+  const chosen = codes.slice(0, -1).includes(from);
+  const fromCode = chosen ? from : defaultBoarding(t);
+  const toCode = codes.indexOf(to) > codes.indexOf(fromCode) ? to : codes.at(-1);
+  state.trip = { trainID, from: fromCode, to: toCode, follow: true, fromAuto: !chosen, editing: false };
+  state.selectedId = trainID;
+  document.body.classList.add("has-detail", "trip-mode");
+  document.body.classList.remove("panel-collapsed");
+  saveTrip();
+  applyTripStyle();
+  render();
+  followTrain(true);
+  keepAwake();
+  if (readPref("tripLocation") === "1" && locationWatch === null) toggleLocation();
+}
+
+function exitTrip() {
+  state.trip = null;
+  document.body.classList.remove("trip-mode");
+  for (const key of ["trip", "from", "to"]) setUrlParam(key, null);
+  if (locationWatch !== null) navigator.geolocation.clearWatch(locationWatch);
+  locationWatch = null;
+  state.me = null;
+  map.getSource("me")?.setData(meGeoJSON());
+  wakeLock?.release();
+  map.setPadding({ top: 0, right: 0, bottom: 0, left: 0 });
+  applyTripStyle();
+  render();
+}
+
+function setTripStops(from, to) {
+  const t = tripTrain();
+  if (!t) return;
+  const codes = t.stations.map((s) => s.code);
+  if (codes.indexOf(to) <= codes.indexOf(from)) to = codes.at(-1);
+  Object.assign(state.trip, { from, to, fromAuto: false });
+  saveTrip();
+  render();
+}
+
+// Where you'd most likely get on: the upcoming stop nearest you if we know where you are, else
+// the stop the train is at or heading for.
+function defaultBoarding(t) {
+  const upcoming = t.stations.slice(0, -1).filter((s) => s.status !== "Departed");
+  return (state.me && nearestStop(upcoming, state.me)) || (upcoming[0] ?? t.stations[0]).code;
+}
+
+function nearestStop(stops, point) {
+  let best = null;
+  for (const s of stops) {
+    const st = state.stations[s.code];
+    const d = st && Number.isFinite(st.lat) ? metersBetween(point, st) : Infinity;
+    if (d < NEAR_STOP_M && (!best || d < best.d)) best = { code: s.code, d };
+  }
+  return best?.code ?? null;
+}
+
+function saveTrip() {
+  const { trainID, from, to } = state.trip;
+  setUrlParam("train", trainID);
+  setUrlParam("trip", trainID);
+  setUrlParam("from", from);
+  setUrlParam("to", to);
+  writePref("trip", JSON.stringify({ trainID, from, to }));
+}
+
+function savedTrip() {
+  try {
+    return JSON.parse(readPref("trip") ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+function readPref(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writePref(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+}
+
+// Where the trip stands: waiting for the train at your stop, boarding, riding, or arrived.
+function tripStatus(t, trip, now = Date.now()) {
+  const stops = t.stations;
+  const iFrom = stops.findIndex((s) => s.code === trip.from);
+  const iTo = stops.findIndex((s) => s.code === trip.to);
+  const nextIdx = stops.findIndex((s) => s.status !== "Departed");
+  const { at } = stopContext(t, isMoving(t, now));
+  const atIdx = at ? stops.indexOf(at) : -1;
+  let phase;
+  if (nextIdx < 0 || nextIdx > iTo || atIdx === iTo) phase = "arrived";
+  else if (nextIdx > iFrom) phase = "riding";
+  else if (atIdx === iFrom) phase = "boarding";
+  else phase = "waiting";
+  return { phase, iFrom, iTo, nextIdx, from: stops[iFrom], to: stops[iTo], next: stops[nextIdx] ?? null };
+}
+
+// A stop's estimated arrival or departure (falling back to the timetable) and how late that is.
+function stopTime(s, kind) {
+  return Date.parse(kind === "arr" ? s.arr || s.schArr || s.dep || s.schDep : s.dep || s.schDep || s.arr || s.schArr);
+}
+
+function stopLateness(s, kind) {
+  const sch = Date.parse(kind === "arr" ? s.schArr || s.schDep : s.schDep || s.schArr);
+  const mins = Math.round((stopTime(s, kind) - sch) / 60_000);
+  if (!Number.isFinite(mins)) return "";
+  if (Math.abs(mins) < 2) return "on time";
+  return mins > 0 ? `${fmtAge(mins)} late` : `${fmtAge(-mins)} early`;
+}
+
+// The trip card's big line: a countdown with its caption, or `due` (e.g. "Due now") once it's up.
+function countdown(ms, caption, due) {
+  const min = (ms - Date.now()) / 60_000;
+  if (!Number.isFinite(min)) return "—";
+  return min < 1 ? due : `${fmtAge(min)} <span>${caption}</span>`;
+}
+
+function fmtDistance(m) {
+  const mi = m / 1609.34;
+  return m < 300 ? `${Math.round((m * 3.281) / 50) * 50 || 50} ft` : `${mi < 10 ? mi.toFixed(1) : Math.round(mi)} mi`;
+}
+
+function renderTrip() {
+  if (!state.trip) return;
+  // Re-rendering would close a stop menu someone has open.
+  if (document.activeElement?.tagName === "SELECT" && tripEl.contains(document.activeElement)) return;
+  const t = tripTrain();
+  if (!t) {
+    tripEl.innerHTML = `<button class="back" data-action="exit-trip">← All trains</button><p class="empty">This train is no longer reporting.</p>`;
+    return;
+  }
+  const trip = tripStatus(t, state.trip);
+  const { phase, from, to, next } = trip;
+  const platform = from.platform ? ` · Track ${esc(from.platform)}` : "";
+  const departs = `Departs ${fmtClock(stopTime(from, "dep"), from.tz)} · ${stopLateness(from, "dep")}${platform}`;
+  const away = trip.iFrom - trip.nextIdx;
+  const hero = {
+    waiting: {
+      kicker: `Waiting at ${esc(from.name)}`,
+      big: countdown(stopTime(from, "arr"), "until the train gets here", "Due now"),
+      sub: departs,
+      note:
+        t.trainState === "Predeparture"
+          ? `Not yet left ${esc(t.origName)}`
+          : away === 0
+            ? "Your stop is next"
+            : `${away} stop${away > 1 ? "s" : ""} away · next ${esc(next?.name)}`,
+    },
+    boarding: {
+      kicker: `Boarding at ${esc(from.name)}`,
+      big: countdown(stopTime(from, "dep"), "until departure", "Leaving now"),
+      sub: departs,
+      note: "The train is in the station",
+    },
+    riding: {
+      kicker: `On board · ${trip.iTo - trip.nextIdx + 1} stop${trip.iTo - trip.nextIdx ? "s" : ""} to go`,
+      big: countdown(stopTime(to, "arr"), `to ${esc(to.name)}`, `Arriving at ${esc(to.name)}`),
+      sub: `Arrives ${fmtClock(stopTime(to, "arr"), to.tz)} · ${stopLateness(to, "arr")}`,
+      note: trip.nextIdx === trip.iTo ? "Your stop is next" : `Next: ${esc(next?.name)} · ${fmtClock(stopTime(next, "arr"), next.tz)}`,
+    },
+    arrived: { kicker: "Trip complete", big: `Arrived <span>at ${esc(to.name)}</span>`, sub: fmtClock(stopTime(to, "arr"), to.tz), note: "" },
+  }[phase];
+  const start = stopTime(from, "dep");
+  const progress = phase === "arrived" ? 1 : phase === "riding" ? Math.min(1, Math.max(0, (Date.now() - start) / (stopTime(to, "arr") - start))) : 0;
+  const stops = t.stations.slice(trip.iFrom, trip.iTo + 1);
+  tripEl.innerHTML = `
+    <button class="back" data-action="exit-trip">← Train details</button>
+    <h2><span class="badge" style="background:${esc(t.iconColor)};color:${esc(t.textColor)}">${esc(t.trainNum)}</span> ${esc(t.routeName)}</h2>
+    <p class="od">${esc(from.name)} → ${esc(to.name)}</p>
+    <section class="trip-hero ${phase}">
+      <div class="trip-kicker">${hero.kicker}</div>
+      <div class="trip-big">${hero.big}</div>
+      <div class="trip-sub">${hero.sub}</div>
+      ${phase === "riding" || phase === "arrived" ? `<div class="trip-progress"><span style="width:${(progress * 100).toFixed(1)}%"></span></div>` : ""}
+      ${hero.note ? `<div class="trip-note">${hero.note}</div>` : ""}
+      ${tripLocationNote(t, trip)}
+    </section>
+    <div class="trip-actions">
+      <button data-action="follow" aria-pressed="${state.trip.follow}">${state.trip.follow ? "Following the train" : "Centre on the train"}</button>
+      <button data-action="locate" aria-pressed="${locationWatch !== null}">${locationWatch !== null ? "Location on" : "Use my location"}</button>
+      <button data-action="share">Share trip</button>
+    </div>
+    ${t.statusMsg?.trim() ? `<p class="alert">${esc(t.statusMsg)}</p>` : ""}
+    <ol class="timeline trip-stops">
+      ${stops
+        .map((s, i) => {
+          const end = i === 0 ? "Get on" : i === stops.length - 1 ? "Get off" : "";
+          const done = s.status === "Departed";
+          const kind = i === 0 ? "dep" : "arr";
+          return `<li class="${done ? "done" : ""}${next && s.code === next.code ? " next" : ""}">
+            <span class="dot" style="border-color:${esc(s.stopIconColor || "#888")}"></span>
+            <span class="stop-name">${esc(s.name)}${end ? ` <span class="trip-end">${end}</span>` : ""}</span>
+            <span class="stop-time">${fmtClock(stopTime(s, kind), s.tz)}</span>
+          </li>`;
+        })
+        .join("")}
+    </ol>
+    <details class="trip-edit"${state.trip.editing ? " open" : ""}>
+      <summary>Change my stops</summary>
+      <label>Get on at <select data-stop="from">${stopOptions(t.stations.slice(0, -1), state.trip.from)}</select></label>
+      <label>Get off at <select data-stop="to">${stopOptions(t.stations.slice(trip.iFrom + 1), state.trip.to)}</select></label>
+    </details>`;
+}
+
+function stopOptions(stops, selected) {
+  return stops.map((s) => `<option value="${esc(s.code)}"${s.code === selected ? " selected" : ""}>${esc(s.name)}</option>`).join("");
+}
+
+function tripLocationNote(t, trip) {
+  if (state.meError) return `<div class="trip-me">${esc(state.meError)}</div>`;
+  if (!state.me || trip.phase === "arrived") return "";
+  let text;
+  if (trip.phase === "riding") {
+    const d = metersBetween(state.me, trainPosition(t));
+    text = d < ON_BOARD_M ? "You're on the train" : `You're ${fmtDistance(d)} from the train`;
+  } else {
+    const st = state.stations[trip.from.code];
+    const d = st ? metersBetween(state.me, st) : Infinity;
+    text = !Number.isFinite(d) ? "" : d < AT_STATION_M ? `You're at ${esc(trip.from.name)}` : `You're ${fmtDistance(d)} from ${esc(trip.from.name)}`;
+  }
+  return text ? `<div class="trip-me">${text}</div>` : "";
+}
+
+tripEl.addEventListener("click", (e) => {
+  if (e.target.closest("[data-action=exit-trip]")) return exitTrip();
+  if (e.target.closest("[data-action=follow]")) {
+    state.trip.follow = !state.trip.follow;
+    if (state.trip.follow) followTrain(true);
+    return renderTrip();
+  }
+  if (e.target.closest("[data-action=locate]")) return toggleLocation();
+  const share = e.target.closest("[data-action=share]");
+  if (share) copyLink(share);
+});
+tripEl.addEventListener("change", (e) => {
+  const which = e.target.dataset.stop;
+  if (!which) return;
+  e.target.blur(); // let renderTrip redraw
+  const { from, to } = state.trip;
+  if (which === "from") setTripStops(e.target.value, to);
+  else setTripStops(from, e.target.value);
+});
+// <details> toggles don't bubble, so listen while the event is on its way down.
+tripEl.addEventListener("toggle", (e) => state.trip && (state.trip.editing = e.target.open), true);
+
+// Keep the train centred in the part of the map the panel doesn't cover. The map holds still
+// until the train drifts FOLLOW_SLACK_PX off centre and then glides back: moving it every frame
+// starves tile loading and runs down a phone's battery.
+const FOLLOW_SLACK_PX = 40;
+
+function followTrain(fly = false) {
+  const t = tripTrain();
+  if (!t || !state.trip.follow) return;
+  const pos = trainPosition(t);
+  const panel = $("#panel").getBoundingClientRect();
+  const padding = window.innerWidth > 640 ? { top: 0, right: 0, bottom: 0, left: panel.right } : { top: 0, right: 0, bottom: window.innerHeight - panel.top, left: 0 };
+  const camera = { center: [pos.lon, pos.lat], padding };
+  if (fly) return map.flyTo({ ...camera, zoom: Math.max(map.getZoom(), TRIP_ZOOM), speed: 1.6 }, { tripFollow: true });
+  const { clientWidth: w, clientHeight: h } = map.getContainer();
+  const at = map.project(camera.center);
+  const drift = Math.hypot(at.x - (padding.left + (w - padding.left) / 2), at.y - (h - padding.bottom) / 2);
+  if (drift > FOLLOW_SLACK_PX) map.easeTo({ ...camera, duration: reduceMotion ? 0 : 1000 }, { tripFollow: true });
+}
+
+// Dragging the map is a sign you want to look around: stop following until asked again.
+map.on("dragstart", () => {
+  if (!state.trip?.follow) return;
+  state.trip.follow = false;
+  renderTrip();
+});
+
+function toggleLocation() {
+  if (locationWatch !== null) {
+    navigator.geolocation.clearWatch(locationWatch);
+    locationWatch = null;
+    state.me = null;
+    writePref("tripLocation", "0");
+  } else if (!navigator.geolocation) {
+    state.meError = "Location isn't available in this browser.";
+  } else {
+    state.meError = null;
+    writePref("tripLocation", "1");
+    locationWatch = navigator.geolocation.watchPosition(onLocation, onLocationError, { enableHighAccuracy: true, maximumAge: 15_000 });
+  }
+  map.getSource("me")?.setData(meGeoJSON());
+  renderTrip();
+}
+
+function onLocation(p) {
+  state.me = { lon: p.coords.longitude, lat: p.coords.latitude };
+  map.getSource("me")?.setData(meGeoJSON());
+  // The first fix can pick the stop you're waiting at, unless you chose one yourself.
+  const t = tripTrain();
+  if (t && state.trip.fromAuto && ["waiting", "boarding"].includes(tripStatus(t, state.trip).phase)) {
+    state.trip.fromAuto = false;
+    const near = nearestStop(t.stations.slice(0, -1).filter((s) => s.status !== "Departed"), state.me);
+    if (near && near !== state.trip.from) return setTripStops(near, state.trip.to);
+  }
+  renderTrip();
+}
+
+function onLocationError(err) {
+  state.meError = err.code === err.PERMISSION_DENIED ? "Location permission was turned down." : "Couldn't find your location.";
+  if (err.code === err.PERMISSION_DENIED) {
+    navigator.geolocation.clearWatch(locationWatch);
+    locationWatch = null;
+    writePref("tripLocation", "0");
+  }
+  renderTrip();
+}
+
+function meGeoJSON() {
+  return {
+    type: "FeatureCollection",
+    features: state.me ? [{ type: "Feature", geometry: { type: "Point", coordinates: [state.me.lon, state.me.lat] }, properties: {} }] : [],
+  };
+}
+
+// Your leg of the route, from the stop you get on at to the one you get off at.
+function tripLegGeoJSON() {
+  const t = tripTrain();
+  const empty = { type: "FeatureCollection", features: [] };
+  if (!t) return empty;
+  const { iFrom, iTo } = tripStatus(t, state.trip);
+  const ends = [state.stations[state.trip.from], state.stations[state.trip.to]];
+  if (ends.some((s) => !s || !Number.isFinite(s.lat))) return empty;
+  const leg =
+    sliceTrack(shapeFor(t), ...ends) ??
+    t.stations
+      .slice(iFrom, iTo + 1)
+      .map((s) => state.stations[s.code])
+      .filter((s) => s && Number.isFinite(s.lat))
+      .map((s) => [s.lon, s.lat]);
+  return leg.length > 1 ? { type: "FeatureCollection", features: [{ type: "Feature", geometry: { type: "LineString", coordinates: leg }, properties: {} }] } : empty;
+}
+
+// On a trip the rest of the train's route fades back so your leg stands out.
+function applyTripStyle() {
+  for (const id of ["route-casing", "route-line", "route-line-approx"]) {
+    if (map.getLayer(id)) map.setPaintProperty(id, "line-opacity", state.trip ? 0.35 : 1);
+  }
+  map.getSource("trip-leg")?.setData(tripLegGeoJSON());
+}
+
+// Keep the screen on while a trip is open (where the browser allows it), and catch up on the
+// train as soon as the page is looked at again.
+async function keepAwake() {
+  if (!state.trip || wakeLock || document.visibilityState !== "visible" || !("wakeLock" in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => (wakeLock = null));
+  } catch {}
+}
+document.addEventListener("visibilitychange", () => {
+  if (!state.trip || document.visibilityState !== "visible") return;
+  keepAwake();
+  refresh();
+});
 
 // ---------------------------------------------------------------------------
 // Helpers

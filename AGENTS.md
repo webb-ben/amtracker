@@ -27,6 +27,10 @@ on the code.
 - To look at the map headless, Chrome needs software WebGL or MapLibre never starts:
   `--headless=new --use-angle=swiftshader --enable-unsafe-swiftshader --virtual-time-budget=20000`.
   A view goes in the hash (`#zoom/lat/lon`) and a train in the query (`?train=99`).
+  A page whose map keeps moving (a trip following its train) never lets virtual time settle;
+  drive Chrome over the DevTools protocol instead (`--remote-debugging-port`, wait, then
+  `Page.captureScreenshot`), which also lets you fake a location with
+  `Emulation.setGeolocationOverride`.
 - Live data changes minute to minute, so check a fix against the API
   (`https://api-v3.amtraker.com/v3/trains/<num>`) as well as on the map.
 

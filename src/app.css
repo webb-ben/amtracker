@@ -646,6 +646,179 @@ h1 {
   text-decoration: underline;
 }
 
+/* ---- My trip ---- */
+#trip {
+  display: none;
+  padding: 0 14px 16px;
+}
+.trip-mode #list-view,
+.trip-mode #detail {
+  display: none;
+}
+.trip-mode #trip {
+  display: block;
+}
+#trip h2 {
+  font-size: 18px;
+  margin: 8px 0 2px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.trip-start {
+  display: block;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  cursor: pointer;
+}
+.trip-start:hover {
+  filter: brightness(1.08);
+}
+.trip-resume {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: calc(100% - 24px);
+  margin: 0 12px 8px;
+  padding: 8px 10px;
+  text-align: left;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  cursor: pointer;
+}
+.trip-hero {
+  margin: 4px 0 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--stage-bg);
+  color: var(--text);
+}
+.trip-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--stage-text);
+}
+.trip-big {
+  margin: 2px 0;
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.trip-big span {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--stage-text);
+}
+.trip-sub,
+.trip-note,
+.trip-me {
+  font-size: 13px;
+}
+.trip-sub {
+  font-weight: 600;
+}
+.trip-note,
+.trip-me {
+  color: var(--stage-text);
+  margin-top: 4px;
+}
+.trip-me::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #1a73e8;
+  box-shadow: 0 0 0 1px rgba(26, 115, 232, 0.4);
+}
+.trip-progress {
+  height: 6px;
+  margin: 8px 0 2px;
+  border-radius: 3px;
+  background: var(--stage-tag);
+  overflow: hidden;
+}
+.trip-progress span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 1s ease;
+}
+.trip-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.trip-actions button {
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--hover);
+  color: var(--accent);
+  cursor: pointer;
+}
+.trip-actions button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.trip-stops li {
+  cursor: default;
+}
+.trip-end {
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--hover);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+.trip-edit {
+  margin-top: 12px;
+  font-size: 13px;
+}
+.trip-edit summary {
+  color: var(--accent);
+  cursor: pointer;
+}
+.trip-edit label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.trip-edit select {
+  max-width: 190px;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .trip-progress span {
+    transition: none;
+  }
+}
+
 /* ---- Station departures board (styled after station display screens) ---- */
 #board {
   position: fixed;
