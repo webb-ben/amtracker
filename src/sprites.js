@@ -179,12 +179,12 @@ export const VEHICLE = {
   gap: 0, // the coupler fills the space between vehicles
 };
 
-// Moving side views get speed streaks behind and a headlight beam ahead; stopped ones are
+// Moving side views get speed streaks behind and (dark mode only) a headlight beam ahead; stopped ones are
 // padded to the same width so the two swap without the image jumping.
 const STREAKS = { 2: "..mmmm..", 4: "mmmmmm..", 6: ".mmm.mm.", 8: "...mmm.." };
 const BEAM = { 5: "ef..", 6: "eeef", 7: "ef.." };
 
-function sideRows(state) {
+function sideRows(state, beam = true) {
   const f = STATES[state];
   const moving = state === "move";
   // side view: cars trail behind (to the left of) the loco
@@ -194,7 +194,7 @@ function sideRows(state) {
   return loco.map((row, y) => {
     const isRail = y === loco.length - 1;
     const before = isRail ? rail(8) : (moving && STREAKS[y]) || "........";
-    const after = isRail ? rail(4) : (moving && BEAM[y]) || "....";
+    const after = isRail ? rail(4) : (moving && beam && BEAM[y]) || "....";
     return before + Array(CARS).fill(car[y]).join(".") + "." + row + after;
   });
 }
@@ -240,6 +240,7 @@ export function buildSprites(scale = SCALE) {
   const sprites = {};
   for (const [state, f] of Object.entries(STATES)) {
     sprites[`side-${state}`] = rasterize(sideRows(state), scale);
+    sprites[`side-${state}-unlit`] = rasterize(sideRows(state, false), scale); // light mode: no beam
     const top = {
       [`loco-${state}`]: applyState(LOCO_TOP, f),
       // Only the last car shows tail lights.
@@ -260,8 +261,8 @@ export function spriteImageData(canvas) {
 }
 
 // Direction indicator filled with `color` (the app colours it by speed): `chevrons` stacked
-// chevrons, or a flat bar for 0.
-export function buildArrow(color = PALETTE.a, chevrons = 1, { thin = false, scale = SCALE } = {}) {
+// chevrons, or a flat bar for 0. `outline` replaces the dark outline (white on the loco).
+export function buildArrow(color = PALETTE.a, chevrons = 1, { thin = false, scale = SCALE, outline = PALETTE.k } = {}) {
   const rows = arrowRows(chevrons);
-  return rasterize(thin ? narrow(rows) : rows, scale, { ...PALETTE, a: color });
+  return rasterize(thin ? narrow(rows) : rows, scale, { ...PALETTE, a: color, k: outline });
 }
