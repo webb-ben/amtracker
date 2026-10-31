@@ -447,6 +447,7 @@ async function refresh() {
     state.trains = Object.values(trains)
       .flat()
       .filter((t) => Number.isFinite(t.lat) && Number.isFinite(t.lon));
+    state.trains.forEach((t) => reconcileStops(t));
     buildPlans();
     if (!state.loaded) {
       state.loaded = true;
@@ -458,6 +459,33 @@ async function refresh() {
     setStatus("Couldn't reach the Amtraker API, retrying…");
   }
   render();
+}
+
+// The feed sometimes leaves stops stuck at "Station" after the train has left them: train 99
+// can report Boston through New Rochelle as in-station while it's south of Baltimore. Check the
+// statuses against the timetable before anything reads them. A stop is departed when a later stop
+// already is, or when it's "Station" but its departure time (estimated, else scheduled) has
+// passed and the train is nowhere near it; a far-off "Station" stop still to come is en route.
+// A train that hasn't set off is left alone: the feed keeps late or cancelled ones at their
+// origin with every stop "Station".
+const STUCK_STATION_M = 2_000;
+
+function reconcileStops(t, now = Date.now()) {
+  const stops = t.stations ?? [];
+  if (t.trainState === "Predeparture") return;
+  const lastDeparted = stops.findLastIndex((s) => s.status === "Departed");
+  stops.forEach((s, i) => {
+    if (s.status === "Departed") return;
+    const st = state.stations[s.code];
+    const away = st && Number.isFinite(st.lat) ? metersBetween(t, st) > STUCK_STATION_M : false;
+    const leaves = Date.parse(s.dep || s.schDep || s.arr || s.schArr);
+    if (i < lastDeparted || (s.status === "Station" && away && leaves < now)) s.status = "Departed";
+    else if (s.status === "Station" && away) s.status = "Enroute";
+  });
+}
+
+function metersBetween(a, b) {
+  return Math.hypot((b.lon - a.lon) * 111_320 * Math.cos((a.lat * Math.PI) / 180), (b.lat - a.lat) * 110_540);
 }
 
 async function loadRoutes() {
@@ -616,7 +644,10 @@ function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneOf) {
   const cars = carsAt(zoom);
   const pxPerArtPx = 1.5 * iconSizeAt(zoom);
   const trainRows = VEHICLE.locoLength + cars * (VEHICLE.gap + VEHICLE.carLength);
-  const rail = laneRail(plan ?? { kind: "free", ...trainPosition(t, now), speed: 0, t0: now }, now, pxPerArtPx * metersPerPx, LANE_ICON_PX * iconSizeAt(zoom), laneOf, trainRows);
+  // A moving train's position is its nose; a stopped one is centred on its position, so trains
+  // standing at a station in opposite directions sit side by side, engines at opposite ends.
+  const lead = properties.moving ? 0 : trainRows / 2;
+  const rail = laneRail(plan ?? { kind: "free", ...trainPosition(t, now), speed: 0, t0: now }, now, pxPerArtPx * metersPerPx, LANE_ICON_PX * iconSizeAt(zoom), laneOf, trainRows, lead);
   const suffix = "-narrow";
   const state = (properties.moving ? "move" : "idle") + suffix;
   const out = [];
@@ -655,13 +686,14 @@ const RAIL_STEP_ROWS = 3; // art px of track between samples of a lane rail
 // the train mid-crossover). Where the track bends tighter than the shift, the inside of the
 // shifted line would loop back on itself, so the loop is cut off where the line crosses itself,
 // leaving the sharp corner a parallel track would have. The rail is sampled lazily as far back
-// as the vehicles need. Positions on it are { i, point }: a point on segment i.
-function laneRail(plan, now, metersPerArtPx, lanePx, laneOf, trainRows) {
+// as the vehicles need. Positions on it are { i, point }: a point on segment i. The rail starts
+// `lead` art px ahead of the train's position, where the nose is drawn.
+function laneRail(plan, now, metersPerArtPx, lanePx, laneOf, trainRows, lead = 0) {
   const turn = map.getBearing();
   const pts = [];
-  let rows = 0;
+  let rows = 0; // behind the nose
   const sample = () => {
-    const p = positionAt(plan, now, rows * metersPerArtPx);
+    const p = positionAt(plan, now, (rows - lead) * metersPerArtPx);
     const s = map.project([p.lon, p.lat]);
     const a = ((p.bearing - turn) * Math.PI) / 180; // right of travel on screen is (cos a, sin a)
     const off = laneOf(rows) * lanePx;
@@ -919,10 +951,12 @@ function trainFeatures() {
     const lengthM = (VEHICLE.locoLength + carsAt(ref) * (VEHICLE.carLength + VEHICLE.gap)) * 1.5 * iconSizeAt(ref) * (metersPerPx / refScale);
     // A moving train also looks one train length ahead of its nose, so it starts switching
     // lanes before it reaches a train in its way rather than once they've collided.
+    // A stopped train is drawn centred on its position (see vehicleFeatures), so its samples are too.
     const samples = carsAt(ref) + 2;
     const ahead = properties.moving && plan ? samples - 1 : 0;
+    const lead = properties.moving ? 0 : (samples - 1) / 2;
     const path = Array.from({ length: ahead + samples }, (_, i) => {
-      const p = plan ? positionAt(plan, now, (lengthM * (i - ahead)) / (samples - 1)) : pos;
+      const p = plan ? positionAt(plan, now, (lengthM * (i - ahead - lead)) / (samples - 1)) : pos;
       const s = map.project([p.lon, p.lat]);
       return [s.x * refScale, s.y * refScale];
     });
@@ -1334,7 +1368,7 @@ function renderDetail() {
           return `<li class="${done ? "done" : ""}${here ? " next" : ""}" data-code="${esc(s.code)}">
             <span class="dot" style="border-color:${esc(s.stopIconColor || "#888")}"></span>
             <span class="stop-name">${esc(s.name)} <span class="code">${esc(s.code)}</span></span>
-            <span class="stop-time">${fmtTime(act, s.tz)}${sch && act && sch !== act ? ` <s>${fmtTime(sch, s.tz)}</s>` : ""}</span>
+            <span class="stop-time">${fmtTime(act || sch, s.tz)}${sch && act && sch !== act ? ` <s>${fmtTime(sch, s.tz)}</s>` : ""}</span>
           </li>`;
         })
         .join("")}
@@ -1530,8 +1564,7 @@ function stopContext(t, moving) {
 function distanceToStop(t, stop) {
   const st = state.stations[stop.code];
   if (!st || !Number.isFinite(st.lat)) return Infinity;
-  const pos = trainPosition(t);
-  return Math.hypot((st.lon - pos.lon) * 111_320 * Math.cos((pos.lat * Math.PI) / 180), (st.lat - pos.lat) * 110_540);
+  return metersBetween(trainPosition(t), st);
 }
 
 function timeliness(t) {
