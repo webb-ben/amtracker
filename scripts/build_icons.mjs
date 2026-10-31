@@ -1,16 +1,16 @@
-// Write favicon.svg from the still frame of the app icon (src/icon.js), for browsers and places
+// Write favicon.svg from the head-on still of the favicon (src/icon.js), for browsers and places
 // that show the static file before the page's script animates the tab icon.
 //   npm run icons
 
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { ICON_SIZE, iconGrid, iconColor } from "../src/icon.js";
+import { ICON_SIZE, faviconGrid, iconColor } from "../src/icon.js";
 
 const out = fileURLToPath(new URL("../favicon.svg", import.meta.url));
 
 // One rect per horizontal run of a colour keeps the file small.
 const rects = [];
-iconGrid(0).forEach((row, y) => {
+faviconGrid().forEach((row, y) => {
   for (let x = 0; x < ICON_SIZE; ) {
     let end = x + 1;
     while (end < ICON_SIZE && row[end] === row[x]) end++;

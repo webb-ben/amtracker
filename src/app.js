@@ -986,7 +986,7 @@ function render() {
   if (boardCode) renderBoard();
 }
 
-animateIcon($(".logo"), $("#favicon"));
+animateIcon(document.querySelector(".logo"), document.getElementById("favicon")); // $ isn't defined yet
 refresh();
 setInterval(refresh, REFRESH_MS);
 
