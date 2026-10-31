@@ -2,3 +2,4 @@
 node_modules/
 GTFS.zip
 data/speed-segments.geojson
+__pycache__/
