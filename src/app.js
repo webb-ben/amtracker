@@ -73,7 +73,7 @@ for (const thin of [false, true]) {
   }
 }
 
-// Zoomed in, a moving loco's outline takes the same speed colour (one image per 10 mph band).
+// Zoomed in, a moving loco is painted the same speed colour (one image per 10 mph band).
 for (let mph = 0; mph <= SPEED_RAMP.at(-1)[0]; mph += ARROW_STEP) arrows[`loco-speed-${mph}`] = buildSpeedLoco(speedColor(mph));
 
 function speedLocoImage(t) {

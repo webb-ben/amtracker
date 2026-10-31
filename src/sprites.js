@@ -49,8 +49,8 @@ const LOCO_TOP = [
   "kbwggggggwbk",
   "kbwwwwwwwwbk",
   "kbbbbbbbbbbk",
-  ".kbnnnnnnbk.",
-  "..kkkkkkkk..",
+  "kbnnnnnnnnbk",
+  "kkkkkkkkkkkk",
 ];
 
 const CAR_TOP = [
@@ -267,12 +267,7 @@ export function buildArrow(color = PALETTE.a, chevrons = 1, { thin = false, scal
   return rasterize(thin ? narrow(rows) : rows, scale, { ...PALETTE, a: color });
 }
 
-// A moving narrow loco whose outer outline is `color`, the colour of its speed.
+// A moving narrow loco painted `color`, the colour of its speed, in place of the livery blue.
 export function buildSpeedLoco(color, scale = SCALE) {
-  const rows = narrow(applyState(LOCO_TOP, STATES.move));
-  const empty = (x, y) => (rows[y]?.[x] ?? ".") === ".";
-  const outlined = rows.map((row, y) =>
-    [...row].map((ch, x) => (ch === "k" && (empty(x - 1, y) || empty(x + 1, y) || empty(x, y - 1) || empty(x, y + 1)) ? "K" : ch)).join(""),
-  );
-  return rasterize(outlined, scale, { ...PALETTE, K: color });
+  return rasterize(narrow(applyState(LOCO_TOP, STATES.move)), scale, { ...PALETTE, b: color });
 }
