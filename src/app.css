@@ -9,6 +9,11 @@
   --freight: #9a6440;
   --rail: #8d9098;
   --shadow: 0 6px 24px rgba(20, 26, 40, 0.18);
+  /* The detail panel's side view: a daytime sky here, night in dark mode. */
+  --stage-bg: linear-gradient(180deg, #cfe7fa, #eef5fb);
+  --stage-text: #4a5875;
+  --stage-tag: rgba(20, 26, 40, 0.08);
+  --stage-track: repeating-linear-gradient(90deg, #9c8a70 0 6px, transparent 6px 14px), #d8cebd;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -23,6 +28,10 @@
     --freight: #a67a57;
     --rail: #6f727c;
     --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+    --stage-bg: linear-gradient(180deg, #1b2440, #0f1422);
+    --stage-text: #b9c4e4;
+    --stage-tag: rgba(255, 255, 255, 0.12);
+    --stage-track: repeating-linear-gradient(90deg, #4d4335 0 6px, transparent 6px 14px), #2a2620;
     color-scheme: dark;
   }
 }
@@ -37,6 +46,10 @@
   --freight: #a67a57;
   --rail: #6f727c;
   --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  --stage-bg: linear-gradient(180deg, #1b2440, #0f1422);
+  --stage-text: #b9c4e4;
+  --stage-tag: rgba(255, 255, 255, 0.12);
+  --stage-track: repeating-linear-gradient(90deg, #4d4335 0 6px, transparent 6px 14px), #2a2620;
   color-scheme: dark;
 }
 
@@ -281,7 +294,7 @@ h1 {
   margin: 8px 0 4px;
   padding: 8px 0 0;
   border-radius: 10px;
-  background: linear-gradient(180deg, #1b2440, #0f1422);
+  background: var(--stage-bg);
   overflow: hidden;
   text-align: center;
 }
@@ -375,7 +388,7 @@ h1 {
   gap: 8px;
   padding: 5px 10px 6px;
   font-size: 11px;
-  color: #b9c4e4;
+  color: var(--stage-text);
 }
 .stage-stops .stop {
   display: flex;
@@ -394,7 +407,7 @@ h1 {
 }
 .track {
   height: 8px;
-  background: repeating-linear-gradient(90deg, #4d4335 0 6px, transparent 6px 14px), #2a2620;
+  background: var(--stage-track);
 }
 .track.moving {
   animation: ties 1.6s linear infinite;
@@ -455,8 +468,8 @@ h1 {
   text-transform: uppercase;
   padding: 2px 7px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-  color: #b9c4e4;
+  background: var(--stage-tag);
+  color: var(--stage-text);
 }
 .motion-tag.moving {
   background: #f5b800;

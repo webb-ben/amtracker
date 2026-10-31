@@ -1,5 +1,5 @@
 import { buildStyle } from "./style.js";
-import { buildSprites, buildArrow, spriteImageData, SCALE, VEHICLE } from "./sprites.js";
+import { buildSprites, buildArrow, buildSpeedLoco, spriteImageData, SCALE, VEHICLE } from "./sprites.js";
 import { planMotion, positionAt, trailAt, hasArrived, travelledAt } from "./motion.js";
 import { animateIcon } from "./icon.js";
 
@@ -63,15 +63,21 @@ const spriteUrls = Object.fromEntries(Object.entries(sprites).map(([k, c]) => [k
 // 10 mph band) and stack more chevrons as it speeds up; a stopped train gets a flat grey bar.
 const ARROW_STEP = 10;
 const CHEVRON_MPH = [40, 70]; // a second chevron from 40 mph, a third from 70
-// Each also has a "-narrow" variant for trains drawn side by side, and a white-outlined narrow
-// "-wake" variant that sits on the locomotive's rear coupler when zoomed in.
+// Each also has a "-narrow" variant for trains drawn side by side.
 const arrows = {};
-const ARROW_VARIANTS = { "": {}, "-narrow": { thin: true }, "-wake": { thin: true, outline: "#ffffff" } };
-for (const [suffix, options] of Object.entries(ARROW_VARIANTS)) {
-  arrows[`arrow-stopped${suffix}`] = buildArrow("#9aa3b2", 0, options);
+for (const thin of [false, true]) {
+  const suffix = thin ? "-narrow" : "";
+  arrows[`arrow-stopped${suffix}`] = buildArrow("#9aa3b2", 0, { thin });
   for (let mph = 0; mph <= SPEED_RAMP.at(-1)[0]; mph += ARROW_STEP) {
-    arrows[`arrow-${mph}${suffix}`] = buildArrow(speedColor(mph), 1 + CHEVRON_MPH.filter((m) => mph >= m).length, options);
+    arrows[`arrow-${mph}${suffix}`] = buildArrow(speedColor(mph), 1 + CHEVRON_MPH.filter((m) => mph >= m).length, { thin });
   }
+}
+
+// Zoomed in, a moving loco's outline takes the same speed colour (one image per 10 mph band).
+for (let mph = 0; mph <= SPEED_RAMP.at(-1)[0]; mph += ARROW_STEP) arrows[`loco-speed-${mph}`] = buildSpeedLoco(speedColor(mph));
+
+function speedLocoImage(t) {
+  return `loco-speed-${Math.min(SPEED_RAMP.at(-1)[0], Math.round(Math.max(0, t.velocity ?? 0) / ARROW_STEP) * ARROW_STEP)}`;
 }
 
 // Parked at a station: nothing in front of the train. Stopped elsewhere: a flat bar.
@@ -327,29 +333,8 @@ function addOverlays() {
     type: "symbol",
     source: "train-vehicles",
     minzoom: SPRITE_ZOOM,
-    filter: ["has", "image"], // not the speed chevrons, which have their own layer
     layout: {
       "icon-image": ["get", "image"],
-      "icon-rotate": ["get", "bearing"],
-      "icon-rotation-alignment": "map",
-      "icon-size": ["interpolate", ["linear"], ["zoom"], ...ICON_SIZE],
-      "icon-allow-overlap": true,
-      "icon-ignore-placement": true,
-      "symbol-sort-key": ["case", ["get", "selected"], 1, 0],
-      "symbol-z-order": "source",
-    },
-    paint: { "icon-opacity": STALE_OPACITY },
-  });
-  // Speed chevrons at the back of each locomotive, the same arrows as the low-zoom heads: coloured
-  // on the heatmap ramp, more of them the faster it goes, a flat bar when stopped between stations.
-  map.addLayer({
-    id: "train-wake",
-    type: "symbol",
-    source: "train-vehicles",
-    minzoom: SPRITE_ZOOM,
-    filter: ["has", "wake"],
-    layout: {
-      "icon-image": ["get", "wake"],
       "icon-rotate": ["get", "bearing"],
       "icon-rotation-alignment": "map",
       "icon-size": ["interpolate", ["linear"], ["zoom"], ...ICON_SIZE],
@@ -418,7 +403,6 @@ const TRAIN_DRAW_LAYERS = [
   "train-trail-stripe",
   "train-heads",
   "train-vehicles",
-  "train-wake",
   "train-numbers-outline",
   "train-numbers",
   "trains",
@@ -655,19 +639,8 @@ function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneOf) {
       properties: { ...properties, ...extra, image, bearing, textRotate },
     });
     at = rear;
-    return bearing;
   };
-  const bearing = place(`loco-${state}`, VEHICLE.locoLength);
-  // Speed chevrons on the coupler at the back of the loco, like its first linkage (none while
-  // parked at a station; see arrowImage).
-  if (properties.arrow) {
-    const coupler = map.unproject(at.point);
-    out.push({
-      type: "Feature",
-      geometry: { type: "Point", coordinates: [coupler.lng, coupler.lat] },
-      properties: { ...properties, wake: `${properties.arrow}-wake`, bearing },
-    });
-  }
+  place(properties.moving ? speedLocoImage(t) : `loco-${state}`, VEHICLE.locoLength);
   for (let i = 0; i < cars; i++) {
     at = rail.along(at, VEHICLE.gap * pxPerArtPx);
     place(i === cars - 1 ? `car-tail-${state}` : `car-${state}`, VEHICLE.carLength, { numbered: i === 0 });

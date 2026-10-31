@@ -261,8 +261,18 @@ export function spriteImageData(canvas) {
 }
 
 // Direction indicator filled with `color` (the app colours it by speed): `chevrons` stacked
-// chevrons, or a flat bar for 0. `outline` replaces the dark outline (white on the loco).
-export function buildArrow(color = PALETTE.a, chevrons = 1, { thin = false, scale = SCALE, outline = PALETTE.k } = {}) {
+// chevrons, or a flat bar for 0.
+export function buildArrow(color = PALETTE.a, chevrons = 1, { thin = false, scale = SCALE } = {}) {
   const rows = arrowRows(chevrons);
-  return rasterize(thin ? narrow(rows) : rows, scale, { ...PALETTE, a: color, k: outline });
+  return rasterize(thin ? narrow(rows) : rows, scale, { ...PALETTE, a: color });
+}
+
+// A moving narrow loco whose outer outline is `color`, the colour of its speed.
+export function buildSpeedLoco(color, scale = SCALE) {
+  const rows = narrow(applyState(LOCO_TOP, STATES.move));
+  const empty = (x, y) => (rows[y]?.[x] ?? ".") === ".";
+  const outlined = rows.map((row, y) =>
+    [...row].map((ch, x) => (ch === "k" && (empty(x - 1, y) || empty(x + 1, y) || empty(x, y - 1) || empty(x, y + 1)) ? "K" : ch)).join(""),
+  );
+  return rasterize(outlined, scale, { ...PALETTE, K: color });
 }

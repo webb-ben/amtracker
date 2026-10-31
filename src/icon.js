@@ -19,6 +19,8 @@ const COLORS = {
   d: "#5a6273", // wheels
   Y: "#ffd84d", // headlight
 };
+// The header logo after dark (when the page's theme is dark): a night sky to match the panel.
+const NIGHT = { ...COLORS, S: "#1b2440", T: "#141c33", G: "#0f1422", s: "#5a6273" };
 
 // Nose to the right. Rows sit on the rail (the wheel row is the last).
 const LOCO = [
@@ -96,7 +98,7 @@ export function iconColor(key) {
 }
 
 /** Paint a grid of colour keys into a canvas of any size, clipped to a rounded square. */
-export function drawIcon(canvas, grid) {
+export function drawIcon(canvas, grid, colors = COLORS) {
   const ctx = canvas.getContext("2d");
   const px = canvas.width / ICON_SIZE;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -106,7 +108,7 @@ export function drawIcon(canvas, grid) {
   ctx.clip();
   grid.forEach((row, y) => {
     for (let x = 0; x < ICON_SIZE; x++) {
-      ctx.fillStyle = COLORS[row[x]];
+      ctx.fillStyle = colors[row[x]];
       ctx.fillRect(x * px, y * px, px, px);
     }
   });
@@ -116,12 +118,15 @@ export function drawIcon(canvas, grid) {
 /**
  * Animate the header logo canvas and the tab favicon. Browsers don't animate SVG favicons,
  * so the favicon is redrawn into a small canvas and swapped in as a data URL each frame.
- * With reduced motion both stay on their still frames.
+ * With reduced motion both stay on their still frames. The logo follows the page's theme
+ * (<html data-theme>); the favicon sits in the browser's tab strip, so it keeps the day sky.
  */
 export function animateIcon(logo, favicon) {
   const tab = document.createElement("canvas");
   tab.width = tab.height = 32;
-  const drawLogo = (frame) => logo && drawIcon(logo, iconGrid(frame));
+  let logoFrame = 0;
+  const drawLogo = (frame) => logo && drawIcon(logo, iconGrid(frame), document.documentElement.dataset.theme === "dark" ? NIGHT : COLORS);
+  new MutationObserver(() => drawLogo(logoFrame)).observe(document.documentElement, { attributeFilter: ["data-theme"] });
   const drawFavicon = (frame) => {
     if (!favicon || document.hidden) return;
     drawIcon(tab, faviconGrid(frame));
@@ -130,7 +135,6 @@ export function animateIcon(logo, favicon) {
   drawLogo(0);
   drawFavicon();
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-  let logoFrame = 0;
   let faviconFrame = 0;
   setInterval(() => drawLogo((logoFrame = (logoFrame + 1) % ICON_FRAMES)), ICON_FRAME_MS);
   setInterval(() => drawFavicon((faviconFrame = (faviconFrame + 1) % FAVICON_FRAMES)), FAVICON_FRAME_MS);
