@@ -1,5 +1,5 @@
 import { buildStyle } from "./style.js";
-import { buildSprites, buildArrow, buildSpeedLoco, spriteImageData, SCALE, VEHICLE } from "./sprites.js";
+import { buildSprites, buildArrow, buildSpeedLoco, buildBlocks, digitPixels, spriteImageData, SCALE, VEHICLE, NARROW_WIDTH, LOCO_NUMBER, NUMBER_DEPTH, LOCO_NAMES } from "./sprites.js";
 import { planMotion, positionAt, trailAt, hasArrived, travelledAt, metersAheadTo, sliceTrack } from "./motion.js";
 import { animateIcon } from "./icon.js";
 
@@ -7,7 +7,8 @@ const API = "https://api-v3.amtraker.com/v3";
 const REFRESH_MS = 60_000;
 const MOTION_MS = 100; // how often extrapolated positions are redrawn
 const SPRITE_ZOOM = 8; // below this, trains are drawn as a slice of track instead of a sprite
-const CAR_ZOOMS = [10, 11.5, 12.5, 13.25, 14, 14.75]; // zoom at which the 1st, 2nd, … car is coupled on behind the loco
+const MIN_CARS = 3; // every loco pulls at least this many cars, so a train always reads as one
+const CAR_ZOOMS = [12, 13, 13.75, 14.25, 14.75]; // zoom at which the 4th, 5th, … car is coupled on, up to eight
 const ICON_SIZE = [7, 0.6, 12, 0.95, 15, 1.6]; // [zoom, size, …] for vehicle sprites
 const TRAIL_PX = 26; // on-screen length of a low-zoom train
 
@@ -32,8 +33,9 @@ const NUMBER_SIZE = [NUMBER_ZOOM, 10, 12, 12, 15, 21]; // [zoom, text size, …]
 const LANES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 // Stopped trains never cross anything, so in a crowded station they pack in on either side.
 const PARKED_LANES = [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6];
-// Lanes are worked out as if the map were at this zoom, so a train keeps its lane while you
-// zoom instead of shuffling as on-screen distances shrink and grow.
+// Lanes are worked out at the zoom you're viewing, so trains that would overlap there split onto
+// parallel tracks (zoomed out, sprites cover kilometres of track). Above this zoom they're
+// worked out as if the map were at it, so a train keeps its lane while you zoom in close.
 const LANE_REF_ZOOM = 14;
 // Trains are drawn with the narrow sprites and thin trails so side-by-side lanes pack tightly.
 const CAR_PX = 12; // drawn car width in icon pixels (8 art px × 1.5)
@@ -47,9 +49,13 @@ const NARROW_TEXT = 0.75; // painted-number size on the narrow cars, relative to
 // slope is 1.5× its average).
 const SWITCH_ROWS_PER_LANE = 70;
 const SWITCH_STALL_ROWS_PER_S = 40; // how fast a crossover finishes once the train has stopped
-const TRAIN_ROWS = 23 + 6 * 21; // longest train (loco + six cars), bounds when a crossover is done
+const TRAIN_ROWS = 23 + (MIN_CARS + CAR_ZOOMS.length) * 21; // longest train (loco + eight cars), bounds when a crossover is done
 const SETTLE_MS = 3000; // lanes snap into place (no crossovers) this long after the first draw
 const HEAD_ICON_SIZE = 0.55; // icon-size of the low-zoom direction arrow
+// On a tilted map, zoomed in, trains stand up as 3D blocks built from their sprites.
+const BLOCK_ZOOM = 12;
+const BLOCK_PITCH = 10; // degrees of tilt before the flat sprites give way to blocks
+const STALE_GREY = "#9aa3b2"; // stale trains' blocks are faded toward this (extrusions have no per-feature opacity)
 
 const HEADING_DEG = { N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
 
@@ -74,10 +80,44 @@ for (const thin of [false, true]) {
 }
 
 // Zoomed in, a moving loco is painted the same speed colour (one image per 10 mph band).
-for (let mph = 0; mph <= SPEED_RAMP.at(-1)[0]; mph += ARROW_STEP) arrows[`loco-speed-${mph}`] = buildSpeedLoco(speedColor(mph));
+for (const name of LOCO_NAMES) {
+  for (let mph = 0; mph <= SPEED_RAMP.at(-1)[0]; mph += ARROW_STEP) arrows[`${name}-speed-${mph}`] = buildSpeedLoco(speedColor(mph), name);
+}
+
+// Headlight beam for dark mode: a warm cone widening ahead of the train (pointing up, i.e.
+// north before rotation), fading out with distance. Its narrow base sits on the loco's nose.
+function headlightBeam() {
+  const w = 56;
+  const h = 100;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  const fade = ctx.createLinearGradient(0, h, 0, 0);
+  fade.addColorStop(0, "rgba(255, 236, 160, 0.9)");
+  fade.addColorStop(0.35, "rgba(255, 228, 140, 0.55)");
+  fade.addColorStop(1, "rgba(255, 220, 120, 0)");
+  ctx.fillStyle = fade;
+  ctx.beginPath();
+  ctx.moveTo(w / 2 - 6, h);
+  ctx.lineTo(w / 2 + 6, h);
+  ctx.lineTo(w, 0);
+  ctx.lineTo(0, 0);
+  ctx.closePath();
+  ctx.fill();
+  return canvas;
+}
+arrows.headlight = headlightBeam();
+
+// Acela trains are led by their own power car; everything else by the standard loco.
+function locoName(t) {
+  return t.routeName === "Acela" ? "acela" : "loco";
+}
+
+const blocks = buildBlocks();
 
 function speedLocoImage(t) {
-  return `loco-speed-${Math.min(SPEED_RAMP.at(-1)[0], Math.round(Math.max(0, t.velocity ?? 0) / ARROW_STEP) * ARROW_STEP)}`;
+  return `${locoName(t)}-speed-${Math.min(SPEED_RAMP.at(-1)[0], Math.round(Math.max(0, t.velocity ?? 0) / ARROW_STEP) * ARROW_STEP)}`;
 }
 
 // Parked at a station: nothing in front of the train. Stopped elsewhere: a flat bar.
@@ -92,14 +132,18 @@ function speedColor(mph) {
   const i = SPEED_RAMP.findIndex(([stop]) => mph <= stop);
   if (i <= 0) return SPEED_RAMP[i < 0 ? SPEED_RAMP.length - 1 : 0][1];
   const [[m0, c0], [m1, c1]] = [SPEED_RAMP[i - 1], SPEED_RAMP[i]];
-  const u = (mph - m0) / (m1 - m0);
+  return mixColor(c0, c1, (mph - m0) / (m1 - m0));
+}
+
+// Hex colour `u` of the way from `a` to `b`.
+function mixColor(a, b, u) {
   const rgb = (c) => [1, 3, 5].map((j) => parseInt(c.slice(j, j + 2), 16));
-  const [a, b] = [rgb(c0), rgb(c1)];
+  const [x, y] = [rgb(a), rgb(b)];
   return (
     "#" +
-    a
+    x
       .map((v, j) =>
-        Math.round(v + (b[j] - v) * u)
+        Math.round(v + (y[j] - v) * u)
           .toString(16)
           .padStart(2, "0"),
       )
@@ -122,6 +166,7 @@ const state = {
   laneAnims: new Map(), // trainID -> { from, to, start } crossover between lanes
   settleUntil: 0, // crossovers are skipped until this time, so the first layout just snaps
   crossing: false, // any crossover in progress (animate every frame)
+  solid: false, // trains drawn as 3D blocks last frame (see solidView)
   loaded: false, // first successful fetch applies ?train= / ?station=
   speed: null, // 30-day speed heatmap, fetched the first time it's switched on
   showSpeed: false,
@@ -153,7 +198,7 @@ const map = new maplibregl.Map({
   hash: true,
   attributionControl: { compact: true, customAttribution: 'Train data <a href="https://amtraker.com">Amtraker</a>' },
 });
-map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "bottom-right");
+map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
 map.addControl(new maplibregl.GeolocateControl({ trackUserLocation: false }), "bottom-right");
 
 map.on("style.load", addOverlays);
@@ -172,10 +217,12 @@ function addOverlays() {
     if (!map.hasImage(id)) map.addImage(id, spriteImageData(canvas), { pixelRatio: SCALE / 1.5 });
   }
 
-  const { points, trails, vehicles } = trainFeatures();
+  const { points, trails, vehicles, solids, beams } = trainFeatures();
   map.addSource("trains", { type: "geojson", data: points });
   map.addSource("train-trails", { type: "geojson", data: trails });
   map.addSource("train-vehicles", { type: "geojson", data: vehicles });
+  map.addSource("train-blocks", { type: "geojson", data: solids });
+  map.addSource("train-beams", { type: "geojson", data: beams });
 
   const dark = state.theme === "dark";
   const accent = dark ? "#7ea2ff" : "#2f5bc4";
@@ -360,6 +407,23 @@ function addOverlays() {
       "icon-opacity": STALE_OPACITY,
     },
   });
+  // Dark mode: moving locos throw a headlight beam on the ground ahead, from the nose (flat or 3D).
+  map.addLayer({
+    id: "train-headlights",
+    type: "symbol",
+    source: "train-beams",
+    minzoom: SPRITE_ZOOM,
+    layout: {
+      "icon-image": "headlight",
+      "icon-anchor": "bottom",
+      "icon-rotate": ["get", "bearing"],
+      "icon-rotation-alignment": "map",
+      "icon-size": ["interpolate", ["linear"], ["zoom"], ...ICON_SIZE],
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true,
+    },
+    paint: { "icon-opacity": ["case", ["get", "stale"], 0.25, 0.85] },
+  });
   // Zoomed in: one sprite per vehicle, each placed on the track at its own bearing.
   map.addLayer({
     id: "train-vehicles",
@@ -377,6 +441,14 @@ function addOverlays() {
       "symbol-z-order": "source",
     },
     paint: { "icon-opacity": STALE_OPACITY },
+  });
+  // Tilted: the same vehicles as 3D blocks (see blockFeatures).
+  map.addLayer({
+    id: "train-blocks",
+    type: "fill-extrusion",
+    source: "train-blocks",
+    minzoom: BLOCK_ZOOM,
+    paint: { "fill-extrusion-color": ["get", "color"], "fill-extrusion-base": ["get", "base"], "fill-extrusion-height": ["get", "height"] },
   });
   // Train number painted on the first car in Amtrak red, once the cars are big enough to hold it.
   // The font server has no bold weight, so a white-outlined copy sits under a copy whose red halo
@@ -404,7 +476,8 @@ function addOverlays() {
     numberLayer("train-numbers-outline", { "text-color": AMTRAK_RED, "text-halo-color": "rgba(255,255,255,0.9)", "text-halo-width": 1.6, "text-opacity": STALE_OPACITY }),
   );
   map.addLayer(numberLayer("train-numbers", { "text-color": AMTRAK_RED, "text-halo-color": AMTRAK_RED, "text-halo-width": 0.6, "text-opacity": STALE_OPACITY }));
-  // Train number label beside the train, until it's painted on the first car instead.
+  // Train number label beside the train, until it's painted on the first car instead (or, in 3D,
+  // on the side of the loco).
   map.addLayer({
     id: "trains",
     type: "symbol",
@@ -439,8 +512,10 @@ function addOverlays() {
   applyTripStyle();
 }
 
-const TRAIN_LAYERS = ["train-vehicles", "trains", "train-heads", "train-trail-casing"];
+const TRAIN_LAYERS = ["train-vehicles", "train-blocks", "trains", "train-heads", "train-trail-casing"];
 const TRAIN_DRAW_LAYERS = [
+  "train-headlights",
+  "train-blocks",
   "train-trail-casing",
   "train-trail",
   "train-trail-stripe",
@@ -496,10 +571,10 @@ async function refresh() {
       state.loaded = true;
       applyUrl();
     }
-    setStatus(`${state.trains.length} trains · updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`);
+    setStatus(`${state.trains.length} · updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`);
   } catch (err) {
     console.error(err);
-    setStatus("Couldn't reach the Amtraker API, retrying…");
+    setStatus("can't reach Amtraker, retrying…");
   }
   render();
 }
@@ -688,7 +763,7 @@ function iconSizeAt(zoom) {
 }
 
 function carsAt(zoom) {
-  return CAR_ZOOMS.filter((z) => zoom >= z).length;
+  return MIN_CARS + CAR_ZOOMS.filter((z) => zoom >= z).length;
 }
 
 function numberSizeAt(zoom) {
@@ -702,7 +777,9 @@ function numberSizeAt(zoom) {
 // consist bends with the track and stays coupled on the inside and outside of a curve alike.
 // `laneOf(rows)` is the (possibly mid-crossover) lane `rows` art px behind the nose.
 // `centreM` (stopped trains) is where the middle of the train goes, meters ahead of its position.
-function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneOf, centreM = null) {
+// With `solid`, vehicles come back as 3D blocks (see blockFeatures) instead of sprite points.
+// A moving loco's headlight beam goes in `beams`, if given (dark mode).
+function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneOf, centreM = null, solid = false, beams = null) {
   const cars = carsAt(zoom);
   const pxPerArtPx = 1.5 * iconSizeAt(zoom);
   const trainRows = VEHICLE.locoLength + cars * (VEHICLE.gap + VEHICLE.carLength);
@@ -716,11 +793,19 @@ function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneOf, ce
   let at = rail.start;
   const place = (image, length, extra = {}) => {
     const rear = rail.chord(at, length * pxPerArtPx);
-    const nose = map.unproject(at.point);
-    const tail = map.unproject(rear.point);
+    const nose = fromWorld(at.point);
+    const tail = fromWorld(rear.point);
     const kx = Math.cos((nose.lat * Math.PI) / 180);
     const bearing = ((Math.atan2((nose.lng - tail.lng) * kx, nose.lat - tail.lat) * 180) / Math.PI + 360) % 360;
-    const center = map.unproject([(at.point[0] + rear.point[0]) / 2, (at.point[1] + rear.point[1]) / 2]);
+    if (extra.lead && beams && properties.moving) {
+      beams.push({ type: "Feature", geometry: { type: "Point", coordinates: [nose.lng, nose.lat] }, properties: { trainID: t.trainID, bearing, stale: properties.stale } });
+    }
+    if (solid) {
+      out.push(...blockFeatures(image, at.point, rear.point, length, pxPerArtPx * metersPerPx, properties, extra.lead ? t.trainNum : null));
+      at = rear;
+      return;
+    }
+    const center = fromWorld([(at.point[0] + rear.point[0]) / 2, (at.point[1] + rear.point[1]) / 2]);
     // The number runs along the car, turned so it never reads upside down. Near-vertical text
     // always reads bottom-to-top (flip window is 160–340°, not 180–360°) so a number like 89
     // can't wobble between orientations and read as 68.
@@ -733,12 +818,67 @@ function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneOf, ce
     });
     at = rear;
   };
-  place(properties.moving ? speedLocoImage(t) : `loco-${state}`, VEHICLE.locoLength);
+  // 3D locos keep the livery; their number goes on the side instead (see blockFeatures).
+  place(properties.moving && !solid ? speedLocoImage(t) : `${locoName(t)}-${state}`, VEHICLE.locoLength, { lead: true });
   for (let i = 0; i < cars; i++) {
     at = rail.along(at, VEHICLE.gap * pxPerArtPx);
     place(i === cars - 1 ? `car-tail-${state}` : `car-${state}`, VEHICLE.carLength, { numbered: i === 0 });
   }
   return out;
+}
+
+// One vehicle as extruded blocks (see buildBlocks), laid on the chord from `nose` to `rear` (map
+// pixels) that its sprite would cover. Sizes are in art pixels like the sprite's, so trains keep
+// the same oversized proportions as the flat ones. A loco also gets `number` in red pixel digits
+// on both sides, as on the side view, reading left to right from either side.
+function blockFeatures(image, nose, rear, length, metersPerArtPx, properties, number = null) {
+  const len = Math.hypot(rear[0] - nose[0], rear[1] - nose[1]) || 1;
+  const step = len / length; // map px per art px
+  const u = [(rear[0] - nose[0]) / len, (rear[1] - nose[1]) / len]; // toward the rear
+  const right = [u[1], -u[0]]; // right of travel (map y points down); column 0 is on the left
+  const at = (row, col) => {
+    const a = row * step;
+    const c = (col - NARROW_WIDTH / 2) * step;
+    const p = fromWorld([nose[0] + u[0] * a + right[0] * c, nose[1] + u[1] * a + right[1] * c]);
+    return [p.lng, p.lat];
+  };
+  const fade = properties.stale ? (c) => mixColor(c, STALE_GREY, 0.55) : (c) => c;
+  const block = (r0, r1, c0, c1, color, base, top) => ({
+    type: "Feature",
+    geometry: { type: "Polygon", coordinates: [[at(r0, c0), at(r0, c1), at(r1, c1), at(r1, c0), at(r0, c0)]] },
+    properties: { trainID: properties.trainID, color: fade(color), base: base * metersPerArtPx, height: top * metersPerArtPx },
+  });
+  const out = (blocks[image] ?? []).map((b) => block(b.r0, b.r1, b.c0, b.c1, b.color, b.base, b.top));
+  if (number) {
+    // Seen from the left side the nose is on your left, so the text runs nose to rear there and
+    // rear to nose on the right.
+    const { row, top, px } = LOCO_NUMBER;
+    const { pixels, width } = digitPixels(number);
+    const first = row - (width * px) / 2;
+    const last = row + (width * px) / 2;
+    for (const { x, y } of pixels) {
+      const [base, height] = [top - (y + 1) * px, top - y * px];
+      const r = first + x * px;
+      out.push(block(r, r + px, -NUMBER_DEPTH, 0, AMTRAK_RED, base, height));
+      const r2 = last - (x + 1) * px;
+      out.push(block(r2, r2 + px, NARROW_WIDTH, NARROW_WIDTH + NUMBER_DEPTH, AMTRAK_RED, base, height));
+    }
+  }
+  return out;
+}
+
+// Trains are laid out in flat map pixels at the current zoom (Web Mercator, 512 px tiles):
+// screen pixels on an untilted, unrotated map, but unaffected by tilt and turn, so lanes and
+// cars keep their spacing on the ground however the map is viewed.
+function toWorld([lon, lat]) {
+  const m = maplibregl.MercatorCoordinate.fromLngLat({ lng: lon, lat });
+  const size = 512 * 2 ** map.getZoom();
+  return [m.x * size, m.y * size];
+}
+
+function fromWorld([x, y]) {
+  const size = 512 * 2 ** map.getZoom();
+  return new maplibregl.MercatorCoordinate(x / size, y / size).toLngLat();
 }
 
 // Where a stopped train's middle is drawn, in meters ahead of its position along its track: on
@@ -755,7 +895,7 @@ function parkedCentre(t, plan, now) {
 
 const RAIL_STEP_ROWS = 3; // art px of track between samples of a lane rail
 
-// The line a train's vehicles are laid along, in screen pixels: its track behind the nose,
+// The line a train's vehicles are laid along, in map pixels (see toWorld): its track behind the nose,
 // shifted sideways by its lane (positive lanes to the right of travel; the lane can vary along
 // the train mid-crossover). Where the track bends tighter than the shift, the inside of the
 // shifted line would loop back on itself, so the loop is cut off where the line crosses itself,
@@ -763,15 +903,14 @@ const RAIL_STEP_ROWS = 3; // art px of track between samples of a lane rail
 // as the vehicles need. Positions on it are { i, point }: a point on segment i. The rail starts
 // `lead` art px ahead of the train's position, where the nose is drawn.
 function laneRail(plan, now, metersPerArtPx, lanePx, laneOf, trainRows, lead = 0) {
-  const turn = map.getBearing();
   const pts = [];
   let rows = 0; // behind the nose
   const sample = () => {
     const p = positionAt(plan, now, (rows - lead) * metersPerArtPx);
-    const s = map.project([p.lon, p.lat]);
-    const a = ((p.bearing - turn) * Math.PI) / 180; // right of travel on screen is (cos a, sin a)
+    const [x, y] = toWorld([p.lon, p.lat]);
+    const a = (p.bearing * Math.PI) / 180; // right of travel in map pixels is (cos a, sin a)
     const off = laneOf(rows) * lanePx;
-    const q = [s.x + Math.cos(a) * off, s.y + Math.sin(a) * off];
+    const q = [x + Math.cos(a) * off, y + Math.sin(a) * off];
     rows += RAIL_STEP_ROWS;
     const last = pts.at(-1);
     if (last && off) {
@@ -884,7 +1023,7 @@ function laneAlong(anim, rows) {
   return base + (anim.to - base) * u * u * (3 - 2 * u); // smoothstep
 }
 
-// Give overlapping trains different lanes. Works in screen space on each train's drawn path
+// Give overlapping trains different lanes. Works in map pixels on each train's drawn path
 // (a polyline through its cars, head first), so curved trains whose tails swing across a
 // neighbour are caught, and it adapts to zoom.
 //
@@ -992,6 +1131,11 @@ function trainFeatures() {
   const points = [];
   const trails = [];
   const vehicles = [];
+  const solids = [];
+  const solid = solidView();
+  const beams = state.theme === "dark" ? [] : null; // headlights only shine in dark mode
+  // Low-zoom trails keep the old fixed reference (see LANE_REF_ZOOM).
+  const laneZoom = zoom >= SPRITE_ZOOM ? Math.min(zoom, LANE_REF_ZOOM) : LANE_REF_ZOOM;
   // Vehicles and trails are rebuilt every frame while zooming, so only bother with what's near the view.
   const b = map.getBounds();
   const padX = (b.getEast() - b.getWest()) * 0.25;
@@ -1017,10 +1161,9 @@ function trainFeatures() {
     if (!nearView(pos)) continue;
     const plan = state.plans.get(t.trainID);
     const metersPerPx = (78271.517 * Math.cos((pos.lat * Math.PI) / 180)) / 2 ** zoom;
-    // Sample the train head to tail (about one point per car) as it would be drawn at
-    // LANE_REF_ZOOM, in that zoom's pixels, so the lane check sees curves and doesn't depend
-    // on the current zoom.
-    const ref = LANE_REF_ZOOM;
+    // Sample the train head to tail (about one point per car) as it would be drawn at the lane
+    // zoom, in that zoom's pixels, so the lane check sees curves.
+    const ref = laneZoom;
     const refScale = 2 ** (ref - zoom);
     const lengthM = (VEHICLE.locoLength + carsAt(ref) * (VEHICLE.carLength + VEHICLE.gap)) * 1.5 * iconSizeAt(ref) * (metersPerPx / refScale);
     // A moving train also looks one train length ahead of its nose, so it starts switching
@@ -1032,13 +1175,13 @@ function trainFeatures() {
     const leadM = centreM === null ? 0 : lengthM / 2 + centreM;
     const path = Array.from({ length: ahead + samples }, (_, i) => {
       const p = plan ? positionAt(plan, now, (lengthM * (i - ahead)) / (samples - 1) - leadM) : pos;
-      const s = map.project([p.lon, p.lat]);
-      return [s.x * refScale, s.y * refScale];
+      const [x, y] = toWorld([p.lon, p.lat]);
+      return [x * refScale, y * refScale];
     });
     entries.push({ t, pos, plan, metersPerPx, properties, point, path, ahead, centreM });
   }
   const onScreen = new Set(state.lanes.keys()); // trains drawn last frame
-  assignLanes(entries, LANE_REF_ZOOM);
+  assignLanes(entries, laneZoom);
   if (!state.settleUntil && entries.length) state.settleUntil = now + SETTLE_MS;
 
   let crossing = false;
@@ -1052,7 +1195,7 @@ function trainFeatures() {
     const properties = e.properties;
     const arrow = properties.arrow && `${properties.arrow}-narrow`;
     point.properties = { ...properties, arrow, headOffset: [(head * LANE_TRAIL_PX) / HEAD_ICON_SIZE, 0] };
-    if (zoom >= SPRITE_ZOOM) vehicles.push(...vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneOf, e.centreM));
+    if (zoom >= SPRITE_ZOOM) (solid ? solids : vehicles).push(...vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneOf, e.centreM, solid, beams));
     else if (plan) {
       const coords = trailAt(plan, now, TRAIL_PX * metersPerPx);
       trails.push({
@@ -1063,15 +1206,23 @@ function trainFeatures() {
     }
   }
   const fc = (features) => ({ type: "FeatureCollection", features });
-  return { points: fc(points), trails: fc(trails), vehicles: fc(vehicles), crossing };
+  return { points: fc(points), trails: fc(trails), vehicles: fc(vehicles), solids: fc(solids), beams: fc(beams ?? []), crossing };
+}
+
+// Trains are drawn as 3D blocks once the map is tilted and zoomed in far enough.
+function solidView() {
+  return map.getZoom() >= BLOCK_ZOOM && map.getPitch() >= BLOCK_PITCH;
 }
 
 function updateTrains() {
-  const { points, trails, vehicles, crossing } = trainFeatures();
+  const { points, trails, vehicles, solids, beams, crossing } = trainFeatures();
   state.crossing = crossing; // keep redrawing every frame until crossovers finish
+  state.solid = solidView();
   map.getSource("trains")?.setData(points);
   map.getSource("train-trails")?.setData(trails);
   map.getSource("train-vehicles")?.setData(vehicles);
+  map.getSource("train-blocks")?.setData(solids);
+  map.getSource("train-beams")?.setData(beams);
 }
 
 function stationsGeoJSON() {
@@ -1149,6 +1300,7 @@ function animate(ts) {
 }
 requestAnimationFrame(animate);
 map.on("zoom", () => (zooming = true));
+map.on("pitch", () => solidView() !== state.solid && (zooming = true)); // swap sprites and blocks as soon as the tilt crosses over
 map.on("moveend", (e) => !e.tripFollow && (lastMotion = 0)); // pick up trains panned into view
 
 // The side view and the trip card depend on the extrapolated position (e.g. "Now arriving"),
@@ -1407,7 +1559,9 @@ function renderDetail() {
   const next = nextStop(t);
   const { at, arriving, last, upcoming } = stopContext(t, moving);
   const platform = at ?? arriving;
-  const side = sprites[`side-${moving ? "move" : "idle"}`];
+  const loco = locoName(t);
+  const sideKey = `${loco === "loco" ? "side" : `side-${loco}`}-${moving ? "move" : "idle"}`;
+  const side = sprites[sideKey];
   const dark = state.theme === "dark"; // the headlight only shines in dark mode
   const stationArt = platform
     ? `<img class="station" src="${spriteUrls.station}" alt="" style="width:${(sprites.station.width / side.width) * 100}%" />
@@ -1434,7 +1588,7 @@ function renderDetail() {
       <span class="motion-tag${tagClass}">${tag}</span>
       <div class="train-wrap">
         ${stationArt}
-        <img class="train" src="${spriteUrls[`side-${moving ? "move" : "idle"}${dark ? "" : "-unlit"}`]}" alt="" />
+        <img class="train" src="${spriteUrls[`${sideKey}${dark ? "" : "-unlit"}`]}" alt="" />
         <span class="car-number">${esc(t.trainNum)}</span>
         ${moving && dark ? `<span class="side-beam"></span>` : ""}
       </div>

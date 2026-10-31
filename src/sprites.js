@@ -96,6 +96,55 @@ const LOCO_SIDE = [
   "ssssssssssssssssssssssssssssssssssssssss",
 ];
 
+// Acela power car: a long pointed nose, white with a blue stripe. Same size as LOCO_TOP/LOCO_SIDE
+// so it couples on the same way.
+const ACELA_TOP = [
+  ".....kk.....",
+  "....kwwk....",
+  "...kwLLwk...",
+  "..kwccccwk..",
+  "..kcccccck..",
+  ".kwccccccwk.",
+  ".kwwwwwwwwk.",
+  "kwwwwwwwwwwk",
+  "kbwggggggwbk",
+  "kbwgddddgwbk",
+  "kbwgdkkdgwbk",
+  "kbwgddddgwbk",
+  "kbwggggggwbk",
+  "kbwggggggwbk",
+  "kbwgddddgwbk",
+  "kbwgddddgwbk",
+  "kbwggggggwbk",
+  "kbwggggggwbk",
+  "kbwgdkkdgwbk",
+  "kbwggggggwbk",
+  "kbwwwwwwwwbk",
+  "kbnnnnnnnnbk",
+  ".kkkkkkkkkk.",
+];
+
+const ACELA_SIDE = [
+  "..kkkkkkkkkkkkkkkkkkkkkkkkkk............",
+  ".kggggggggggggggggggggggggggkkk.........",
+  "kgwwwwwwwwwwwwwwwwwwwwwwwwwwwwwkkk......",
+  "kwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwcccckk...",
+  "kwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwccccckk.",
+  "kwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwk",
+  "kbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbLk",
+  "kwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwk",
+  "knnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnk.",
+  "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk..",
+  "..kdddk..kdddk..........kdddk..kdddk....",
+  ".kdAdBdkkdAdBdk........kdAdBdkkdAdBdk...",
+  "..kdddk..kdddk..........kdddk..kdddk....",
+  "ssssssssssssssssssssssssssssssssssssssss",
+];
+
+// Locomotive designs by sprite prefix: "loco" for most trains, "acela" for Acela's power car.
+const LOCOS = { loco: [LOCO_TOP, LOCO_SIDE], acela: [ACELA_TOP, ACELA_SIDE] };
+export const LOCO_NAMES = Object.keys(LOCOS);
+
 const CAR_SIDE = [
   ".kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk.",
   "kgggggggggggggggggggggggggggggggggggggk",
@@ -184,11 +233,11 @@ export const VEHICLE = {
 const STREAKS = { 2: "..mmmm..", 4: "mmmmmm..", 6: ".mmm.mm.", 8: "...mmm.." };
 const BEAM = { 5: "ef..", 6: "eeef", 7: "ef.." };
 
-function sideRows(state, beam = true) {
+function sideRows(state, beam = true, locoSide = LOCO_SIDE) {
   const f = STATES[state];
   const moving = state === "move";
   // side view: cars trail behind (to the left of) the loco
-  const loco = applyState(LOCO_SIDE, f);
+  const loco = applyState(locoSide, f);
   const car = applyState(CAR_SIDE, f);
   const rail = (n) => "s".repeat(n);
   return loco.map((row, y) => {
@@ -226,7 +275,8 @@ function stationRows() {
   return rows;
 }
 
-// Returns canvases keyed "side-<state>", "loco-<state>", "car-<state>", "car-tail-<state>", "station".
+// Returns canvases keyed "side-<state>", "loco-<state>", "car-<state>", "car-tail-<state>", "station",
+// plus "side-acela-<state>" and "acela-<state>" for Acela's power car (see LOCOS).
 // Narrow variants for trains drawn side by side: the 12-wide top-view grids lose four interior
 // columns (two each side of centre), keeping the outline, livery edge and centre detail.
 const NARROW_DROP = new Set([2, 4, 7, 9]);
@@ -239,14 +289,18 @@ function narrow(rows) {
 export function buildSprites(scale = SCALE) {
   const sprites = {};
   for (const [state, f] of Object.entries(STATES)) {
-    sprites[`side-${state}`] = rasterize(sideRows(state), scale);
-    sprites[`side-${state}-unlit`] = rasterize(sideRows(state, false), scale); // light mode: no beam
-    const top = {
-      [`loco-${state}`]: applyState(LOCO_TOP, f),
+    const top = {};
+    for (const [name, [locoTop, locoSide]] of Object.entries(LOCOS)) {
+      const side = name === "loco" ? "side" : `side-${name}`;
+      sprites[`${side}-${state}`] = rasterize(sideRows(state, true, locoSide), scale);
+      sprites[`${side}-${state}-unlit`] = rasterize(sideRows(state, false, locoSide), scale); // light mode: no beam
+      top[`${name}-${state}`] = applyState(locoTop, f);
+    }
+    Object.assign(top, {
       // Only the last car shows tail lights.
       [`car-${state}`]: applyState(CAR_TOP, { ...f, T: "b" }),
       [`car-tail-${state}`]: applyState(CAR_TOP, f),
-    };
+    });
     for (const [key, rows] of Object.entries(top)) {
       sprites[key] = rasterize(rows, scale);
       sprites[`${key}-narrow`] = rasterize(narrow(rows), scale);
@@ -267,7 +321,130 @@ export function buildArrow(color = PALETTE.a, chevrons = 1, { thin = false, scal
   return rasterize(thin ? narrow(rows) : rows, scale, { ...PALETTE, a: color });
 }
 
-// A moving narrow loco painted `color`, the colour of its speed, in place of the livery blue.
-export function buildSpeedLoco(color, scale = SCALE) {
-  return rasterize(narrow(applyState(LOCO_TOP, STATES.move)), scale, { ...PALETTE, b: color });
+// A moving narrow loco (`name` from LOCOS) painted `color`, the colour of its speed, in place of the livery blue.
+export function buildSpeedLoco(color, name = "loco", scale = SCALE) {
+  return rasterize(narrow(applyState(LOCOS[name][0], STATES.move)), scale, { ...PALETTE, b: color });
+}
+
+// ---- 3D blocks (tilted map) ------------------------------------------------
+
+// A vehicle is built from both views: the top view is its roof, and its sides are skinned with
+// the side view, stretched to the top view's length (and by the same amount upward). Each roof
+// row stands as tall as the side view's outline above it, so the loco's nose slopes the same way.
+const WHEEL_ROWS = 3; // side-view rows of wheels under the body, above the rail
+const SIDE_DEPTH = 0.1; // art px the side skin stands off the body
+const ROOF_LIFT = { d: 0.3 }; // roof vents stand proud
+const GEAR = "#2a2f3a"; // running gear between the wheels
+export const NUMBER_DEPTH = 2 * SIDE_DEPTH; // the loco's number sits on top of the skin
+
+// Runs of one character along a grid row, as [char, start, end).
+function runs(row) {
+  const out = [];
+  for (let x = 0; x < row.length; ) {
+    let end = x + 1;
+    while (row[end] === row[x]) end++;
+    if (row[x] !== ".") out.push([row[x], x, end]);
+    x = end;
+  }
+  return out;
+}
+
+// One vehicle as blocks { r0, r1, c0, c1, color, base, top }: rows back from the nose and columns
+// across from the left (as in the narrow top view), heights up from the ground, all in art pixels.
+// `lead` top-view rows (a car's coupler) sit ahead of the body.
+function solidBlocks(topRows, sideRows, lead) {
+  const roof = narrow(topRows);
+  const width = roof[0].length;
+  const side = sideRows.slice(0, -1); // no rail
+  const cols = Math.max(...side.map((r) => r.length));
+  const step = (roof.length - lead) / cols;
+  const up = (y) => (side.length - 1 - y) * step; // bottom of side row y
+  const bodyBase = WHEEL_ROWS * step;
+  // Side column x (nose on the right) covers rows [back(x + 1), back(x)) of the top view.
+  const back = (x) => lead + (cols - x) * step;
+  const column = (r) => Math.min(cols - 1, Math.max(0, cols - 1 - Math.floor((r - lead) / step)));
+  const sideTop = (x) => {
+    const y = side.findIndex((row) => row[x] && row[x] !== ".");
+    return y < 0 ? 0 : up(y) + step;
+  };
+  // A roof row stands as tall as the tallest side column alongside it, so no side pokes up past
+  // the roof and shows its inside.
+  const height = (r) => {
+    if (r < lead) return bodyBase + step;
+    let top = 0;
+    for (let x = column(r + 1 - 1e-6); x <= column(r); x++) top = Math.max(top, sideTop(x));
+    return top || bodyBase + step;
+  };
+  // The roof's outline at a point along the vehicle, [left, right) in columns: the sides hug it
+  // where the nose narrows.
+  const edges = (x) => {
+    const row = roof[Math.min(roof.length - 1, Math.max(0, Math.floor(back(x + 1) + step / 2)))];
+    return [row.search(/[^.]/), row.length - [...row].reverse().join("").search(/[^.]/)];
+  };
+  const out = [{ r0: lead + 0.5, r1: roof.length - 0.5, c0: 1, c1: width - 1, color: GEAR, base: 0, top: bodyBase }];
+  roof.forEach((row, r) => {
+    for (const [ch, from, to] of runs(row)) {
+      out.push({ r0: r, r1: r + 1, c0: from, c1: to, color: PALETTE[ch], base: bodyBase, top: height(r) + (ROOF_LIFT[ch] ?? 0) });
+    }
+  });
+  side.forEach((row, y) => {
+    for (const [ch, from, to] of runs(row)) {
+      // Split the run wherever the roof's outline steps in, so each piece sits on it.
+      for (let end = to; end > from; ) {
+        const [left, right] = edges(end - 1);
+        let start = end - 1; // columns [start, end) share an outline
+        while (start > from && edges(start - 1).join() === [left, right].join()) start--;
+        const skin = { r0: back(end), r1: back(start), color: PALETTE[ch], base: up(y), top: up(y) + step };
+        out.push({ ...skin, c0: left - SIDE_DEPTH, c1: left }, { ...skin, c0: right, c1: right + SIDE_DEPTH });
+        end = start;
+      }
+    }
+  });
+  return out;
+}
+
+// Each narrow top-view sprite as 3D blocks (see solidBlocks), keyed like the sprites.
+export function buildBlocks() {
+  const blocks = {};
+  for (const [state, f] of Object.entries(STATES)) {
+    for (const [name, [locoTop, locoSide]] of Object.entries(LOCOS)) {
+      blocks[`${name}-${state}-narrow`] = solidBlocks(applyState(locoTop, f), applyState(locoSide, f), 0);
+    }
+    blocks[`car-${state}-narrow`] = solidBlocks(applyState(CAR_TOP, { ...f, T: "b" }), applyState(CAR_SIDE, f), 1);
+    blocks[`car-tail-${state}-narrow`] = solidBlocks(applyState(CAR_TOP, f), applyState(CAR_SIDE, f), 1);
+  }
+  return blocks;
+}
+
+// Where the number goes on a 3D loco's side: on the white band, rows 2–4 of LOCO_SIDE, centred on
+// its column 17, well back from the cab. In art pixels, as for solidBlocks.
+const LOCO_STEP = LOCO_TOP.length / LOCO_SIDE[0].length;
+export const LOCO_NUMBER = {
+  row: (LOCO_SIDE[0].length - 17.5) * LOCO_STEP,
+  top: (LOCO_SIDE.length - 1 - 2) * LOCO_STEP,
+  px: (3 * LOCO_STEP) / 5, // five digit rows in three side-view rows
+};
+
+// 3×5 pixel digits for the number on the side of a 3D loco.
+const DIGITS = {
+  0: ["###", "#.#", "#.#", "#.#", "###"],
+  1: [".#.", "##.", ".#.", ".#.", "###"],
+  2: ["###", "..#", "###", "#..", "###"],
+  3: ["###", "..#", ".##", "..#", "###"],
+  4: ["#.#", "#.#", "###", "..#", "..#"],
+  5: ["###", "#..", "###", "..#", "###"],
+  6: ["###", "#..", "###", "#.#", "###"],
+  7: ["###", "..#", "..#", "..#", "..#"],
+  8: ["###", "#.#", "###", "#.#", "###"],
+  9: ["###", "#.#", "###", "..#", "###"],
+};
+
+// The lit pixels of `text` in that font, as { x, y } from its top left, and its width in pixels.
+export function digitPixels(text) {
+  const pixels = [];
+  const digits = [...String(text)].filter((ch) => DIGITS[ch]);
+  digits.forEach((ch, i) =>
+    DIGITS[ch].forEach((row, y) => [...row].forEach((on, x) => on === "#" && pixels.push({ x: i * 4 + x, y }))),
+  );
+  return { pixels, width: Math.max(0, digits.length * 4 - 1) };
 }

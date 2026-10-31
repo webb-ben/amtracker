@@ -115,10 +115,12 @@ h1 {
   font-size: 16px;
   margin: 0;
 }
+/* Train count and last update, as subtext on the "Show trains" toggle. */
 #status {
-  margin: 0;
-  font-size: 12px;
   color: var(--muted);
+}
+#status::before {
+  content: "· ";
 }
 .tools button {
   border: 0;
@@ -182,10 +184,12 @@ h1 {
 }
 .legend-toggle {
   flex-basis: 100%;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 4px 16px;
 }
 .legend-toggle label {
   display: flex;
+  white-space: nowrap;
   align-items: center;
   gap: 6px;
   cursor: pointer;

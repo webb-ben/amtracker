@@ -23,8 +23,10 @@ A live Amtrak train map in the spirit of [amtraker.com/map](https://amtraker.com
 - **Sharing**: selecting a train puts `?train=<id>` in the URL (a bare train number works too);
   `?station=<code>` opens a station's board. The `#zoom/lat/lon` part is the map view.
 - **Sprites**: pixel-art locomotives and cars drawn from character grids in `src/sprites.js`; preview
-  them at `sprites.html`. From zoom 8 each vehicle is its own sprite placed on the track, and cars
-  are coupled on as you zoom in.
+  them at `sprites.html`. From zoom 8 each vehicle is its own sprite placed on the track: a loco and
+  three cars, with more coupled on as you zoom in, up to eight. Tilt the map (right-drag, or two-finger drag) from zoom 12 and the
+  trains stand up in 3D: the top-view sprite is the roof, the side-view sprite is painted on the
+  sides, and the loco carries its train number.
 
 ## Run
 

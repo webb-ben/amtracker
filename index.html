@@ -17,10 +17,7 @@
       <header>
         <div class="brand">
           <canvas class="logo" width="16" height="16" aria-hidden="true"></canvas>
-          <div>
-            <h1>Amtracker</h1>
-            <p id="status">Loading…</p>
-          </div>
+          <h1>Amtracker</h1>
         </div>
         <div class="tools">
           <button id="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">◐</button>
@@ -35,7 +32,7 @@
             <li><span class="swatch freight"></span>Freight rail</li>
             <li><span class="swatch passenger"></span>Passenger-only</li>
             <li class="legend-toggle">
-              <label><input id="trains-toggle" type="checkbox" checked /> Show trains</label>
+              <label><input id="trains-toggle" type="checkbox" checked /> Show trains <span id="status">Loading…</span></label>
               <label><input id="speed-toggle" type="checkbox" /> Speed heatmap (30 days)</label>
             </li>
           </ul>
