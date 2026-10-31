@@ -50,7 +50,7 @@ const LOCO_TOP = [
   "kbwwwwwwwwbk",
   "kbbbbbbbbbbk",
   "kbnnnnnnnnbk",
-  "kkkkkkkkkkkk",
+  ".kkkkkkkkkk.",
 ];
 
 const CAR_TOP = [
