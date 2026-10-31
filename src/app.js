@@ -1,6 +1,6 @@
 import { buildStyle } from "./style.js";
 import { buildSprites, buildArrow, buildSpeedLoco, spriteImageData, SCALE, VEHICLE } from "./sprites.js";
-import { planMotion, positionAt, trailAt, hasArrived, travelledAt } from "./motion.js";
+import { planMotion, positionAt, trailAt, hasArrived, travelledAt, metersAheadTo } from "./motion.js";
 import { animateIcon } from "./icon.js";
 
 const API = "https://api-v3.amtraker.com/v3";
@@ -640,13 +640,14 @@ function numberSizeAt(zoom) {
 // lane rail (see laneRail): each vehicle is a chord whose ends both sit on the rail, so the
 // consist bends with the track and stays coupled on the inside and outside of a curve alike.
 // `laneOf(rows)` is the (possibly mid-crossover) lane `rows` art px behind the nose.
-function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneOf) {
+// `centreM` (stopped trains) is where the middle of the train goes, meters ahead of its position.
+function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneOf, centreM = null) {
   const cars = carsAt(zoom);
   const pxPerArtPx = 1.5 * iconSizeAt(zoom);
   const trainRows = VEHICLE.locoLength + cars * (VEHICLE.gap + VEHICLE.carLength);
-  // A moving train's position is its nose; a stopped one is centred on its position, so trains
-  // standing at a station in opposite directions sit side by side, engines at opposite ends.
-  const lead = properties.moving ? 0 : trainRows / 2;
+  // A moving train's position is its nose; a stopped one is centred (see parkedCentre), so
+  // trains standing at a station sit side by side, engines at opposite ends.
+  const lead = centreM === null ? 0 : trainRows / 2 + centreM / (pxPerArtPx * metersPerPx);
   const rail = laneRail(plan ?? { kind: "free", ...trainPosition(t, now), speed: 0, t0: now }, now, pxPerArtPx * metersPerPx, LANE_ICON_PX * iconSizeAt(zoom), laneOf, trainRows, lead);
   const suffix = "-narrow";
   const state = (properties.moving ? "move" : "idle") + suffix;
@@ -677,6 +678,18 @@ function vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneOf) {
     place(i === cars - 1 ? `car-tail-${state}` : `car-${state}`, VEHICLE.carLength, { numbered: i === 0 });
   }
   return out;
+}
+
+// Where a stopped train's middle is drawn, in meters ahead of its position along its track: on
+// the station it's standing at, so every train at a platform lines up across it, or else on its
+// own position. GPS fixes at a station scatter along the platforms and beyond.
+const PARK_SNAP_M = 800;
+
+function parkedCentre(t, plan, now) {
+  const { at } = stopContext(t, false);
+  const st = at && state.stations[at.code];
+  const d = st && Number.isFinite(st.lat) ? metersAheadTo(plan, now, st) : null;
+  return d !== null && Math.abs(d) <= PARK_SNAP_M ? d : 0;
 }
 
 const RAIL_STEP_ROWS = 3; // art px of track between samples of a lane rail
@@ -951,16 +964,17 @@ function trainFeatures() {
     const lengthM = (VEHICLE.locoLength + carsAt(ref) * (VEHICLE.carLength + VEHICLE.gap)) * 1.5 * iconSizeAt(ref) * (metersPerPx / refScale);
     // A moving train also looks one train length ahead of its nose, so it starts switching
     // lanes before it reaches a train in its way rather than once they've collided.
-    // A stopped train is drawn centred on its position (see vehicleFeatures), so its samples are too.
+    // A stopped train is drawn centred on its station (see vehicleFeatures), so its samples are too.
     const samples = carsAt(ref) + 2;
     const ahead = properties.moving && plan ? samples - 1 : 0;
-    const lead = properties.moving ? 0 : (samples - 1) / 2;
+    const centreM = properties.moving ? null : parkedCentre(t, plan, now);
+    const leadM = centreM === null ? 0 : lengthM / 2 + centreM;
     const path = Array.from({ length: ahead + samples }, (_, i) => {
-      const p = plan ? positionAt(plan, now, (lengthM * (i - ahead - lead)) / (samples - 1)) : pos;
+      const p = plan ? positionAt(plan, now, (lengthM * (i - ahead)) / (samples - 1) - leadM) : pos;
       const s = map.project([p.lon, p.lat]);
       return [s.x * refScale, s.y * refScale];
     });
-    entries.push({ t, pos, plan, metersPerPx, properties, point, path, ahead });
+    entries.push({ t, pos, plan, metersPerPx, properties, point, path, ahead, centreM });
   }
   const onScreen = new Set(state.lanes.keys()); // trains drawn last frame
   assignLanes(entries, LANE_REF_ZOOM);
@@ -977,7 +991,7 @@ function trainFeatures() {
     const properties = e.properties;
     const arrow = properties.arrow && `${properties.arrow}-narrow`;
     point.properties = { ...properties, arrow, headOffset: [(head * LANE_TRAIL_PX) / HEAD_ICON_SIZE, 0] };
-    if (zoom >= SPRITE_ZOOM) vehicles.push(...vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneOf));
+    if (zoom >= SPRITE_ZOOM) vehicles.push(...vehicleFeatures(t, plan, now, zoom, metersPerPx, properties, laneOf, e.centreM));
     else if (plan) {
       const coords = trailAt(plan, now, TRAIL_PX * metersPerPx);
       trails.push({

@@ -123,6 +123,17 @@ export function hasArrived(plan, now) {
   return plan.dir * (plan.along0 + plan.dir * plan.speed * s - plan.limit) >= 0;
 }
 
+/**
+ * Meters along the track from the train's extrapolated position to where `point` ({lon, lat})
+ * falls on it, positive ahead; null off a track or when the point is far from it.
+ */
+export function metersAheadTo(plan, now, point) {
+  if (plan?.kind !== "track") return null;
+  const at = project(plan.coords, plan.cum, point.lon, point.lat);
+  if (at.off > MAX_OFF_TRACK_M) return null;
+  return plan.dir * (at.along - plan.along0) - travelledAt(plan, now);
+}
+
 /** Extrapolated {lon, lat, bearing} for a plan at time `now` (ms), `behind` meters back along the track. */
 export function positionAt(plan, now, behind = 0) {
   if (plan.kind === "free") {
