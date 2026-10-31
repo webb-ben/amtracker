@@ -96,9 +96,7 @@ button {
   width: 28px;
   height: 28px;
   border-radius: 7px;
-  background: linear-gradient(180deg, #2f5bc4 0 45%, #e9edf3 45% 60%, #1a2c6b 60%);
-  box-shadow: inset 0 0 0 2px #141a28;
-  image-rendering: pixelated;
+  image-rendering: pixelated; /* drawn on a 16×16 grid by src/icon.js */
 }
 h1 {
   font-size: 16px;
@@ -184,6 +182,20 @@ h1 {
   margin: 0 14px 10px;
   font-size: 12px;
   color: var(--muted);
+}
+.speed-period {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.speed-period select {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 4px;
 }
 .speed-info .ramp {
   height: 8px;
@@ -305,10 +317,11 @@ h1 {
   pointer-events: none;
 }
 .car-number {
+  /* On the locomotive's white upper body (art columns 99–122 of 132, rows 2–4 of 14). */
   position: absolute;
   z-index: 2;
-  left: 51%;
-  top: 30%;
+  left: 84%;
+  top: 26%;
   transform: translate(-50%, -50%);
   color: #c8102e;
   font:

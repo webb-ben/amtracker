@@ -30,12 +30,14 @@ python3 -m http.server 8000
 
 ## Speed heatmap
 
-`.github/workflows/speed-heatmap.yml` samples live train speeds every 15 minutes
+`.github/workflows/speed-heatmap.yml` samples live train speeds every 10 minutes
 (`scripts/speed/collect.py`), snapping each moving train to a ~1 km segment of its GTFS route.
 Daily totals and the 30-day average (`scripts/speed/build.py` → `speed-segments.geojson`) live on
 the orphan `speed-data` branch, which is force-pushed as a single commit each run. The page reads
 the heatmap straight from that branch via raw.githubusercontent.com; turn it on with the
-"Speed heatmap" toggle or `?speed=1`.
+"Speed heatmap" toggle or `?speed=1`. Samples are also bucketed into six 4-hour slices of the
+day on each train's local clock, so the heatmap can show, say, evening rush hour on its own (the
+"Time of day" menu, or `?speedtime=0`–`5`).
 
 To try it with your own samples locally (a local `data/speed-segments.geojson` takes precedence
 on localhost):

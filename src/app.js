@@ -1,6 +1,7 @@
 import { buildStyle } from "./style.js";
 import { buildSprites, buildArrow, spriteImageData, SCALE, VEHICLE } from "./sprites.js";
 import { planMotion, positionAt, trailAt, hasArrived, travelledAt } from "./motion.js";
+import { animateIcon } from "./icon.js";
 
 const API = "https://api-v3.amtraker.com/v3";
 const REFRESH_MS = 60_000;
@@ -138,6 +139,7 @@ const state = {
   loaded: false, // first successful fetch applies ?train= / ?station=
   speed: null, // 30-day speed heatmap, fetched the first time it's switched on
   showSpeed: false,
+  speedPeriod: "", // heatmap time of day: "" all day, or "0".."5" (see SPEED_PERIODS)
   showTrains: true,
   theme: preferredTheme(),
 };
@@ -211,9 +213,10 @@ function addOverlays() {
       id: "speed-heatmap",
       type: "line",
       source: "speed",
+      filter: ["has", speedProp()],
       layout: { "line-join": "round", "line-cap": "round", visibility: state.showSpeed ? "visible" : "none" },
       paint: {
-        "line-color": ["interpolate", ["linear"], ["get", "mph"], ...SPEED_RAMP.flat()],
+        "line-color": speedColorExpr(),
         "line-width": ["interpolate", ["linear"], ["zoom"], 3, 2.5, 8, 4, 13, 7],
       },
     },
@@ -983,6 +986,7 @@ function render() {
   if (boardCode) renderBoard();
 }
 
+animateIcon($(".logo"), $("#favicon"));
 refresh();
 setInterval(refresh, REFRESH_MS);
 
@@ -1075,6 +1079,22 @@ async function loadSpeedSegments() {
   return null;
 }
 
+// Time of day for the heatmap: "" for all day, or a 4-hour slice of the train's local time
+// (scripts/speed/build.py writes mph0..mph5 alongside the all-day mph).
+const SPEED_PERIODS = ["12–4 am", "4–8 am", "8 am–12 pm", "12–4 pm", "4–8 pm", "8 pm–12 am"];
+const speedProp = () => (state.speedPeriod === "" ? "mph" : `mph${state.speedPeriod}`);
+const speedColorExpr = () => ["interpolate", ["linear"], ["get", speedProp()], ...SPEED_RAMP.flat()];
+
+function setSpeedPeriod(period) {
+  state.speedPeriod = period;
+  setUrlParam("speedtime", period === "" ? null : period);
+  if (map.getLayer("speed-heatmap")) {
+    map.setFilter("speed-heatmap", ["has", speedProp()]);
+    map.setPaintProperty("speed-heatmap", "line-color", speedColorExpr());
+  }
+  renderSpeedInfo();
+}
+
 function renderSpeedInfo() {
   const meta = state.speed?.metadata;
   const info = $("#speed-info");
@@ -1086,7 +1106,15 @@ function renderSpeedInfo() {
   info.innerHTML = `
     <div class="ramp" style="background: linear-gradient(90deg, ${stops})"></div>
     <div class="ramp-labels"><span>${SPEED_RAMP[0][0]} mph</span><span>${SPEED_RAMP.at(-1)[0]}+</span></div>
-    <div>Average moving speed${meta?.days ? ` · ${meta.days} day${meta.days > 1 ? "s" : ""} of samples` : ""}</div>`;
+    <div>Average moving speed${meta?.days ? ` · ${meta.days} day${meta.days > 1 ? "s" : ""} of samples` : ""}</div>
+    <label class="speed-period">Time of day
+      <select id="speed-period">
+        <option value="">All day</option>
+        ${SPEED_PERIODS.map((label, i) => `<option value="${i}"${String(i) === state.speedPeriod ? " selected" : ""}>${label}</option>`).join("")}
+      </select>
+    </label>
+    ${state.speedPeriod !== "" && !state.speed.features.some((f) => speedProp() in f.properties) ? "<div>Not enough samples for this time of day yet.</div>" : ""}`;
+  $("#speed-period").addEventListener("change", (e) => setSpeedPeriod(e.target.value));
 }
 
 function preferredTheme() {
@@ -1183,6 +1211,8 @@ function applyUrl() {
     const t = state.trains.find((x) => x.trainID === wanted) ?? state.trains.find((x) => x.trainNum === num);
     if (t) selectTrain(t.trainID, { fit: !linkHasView });
   }
+  const period = params.get("speedtime");
+  if (/^[0-5]$/.test(period ?? "")) state.speedPeriod = period;
   if (params.get("speed") === "1") setSpeedHeatmap(true);
   if (params.get("trains") === "0") setShowTrains(false);
   const station = params.get("station");

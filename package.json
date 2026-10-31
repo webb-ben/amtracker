@@ -4,6 +4,7 @@
   "type": "module",
   "description": "Build tooling only; the site itself has no build step.",
   "scripts": {
+    "icons": "node scripts/build_icons.mjs",
     "station-tracks": "node scripts/build_station_tracks.mjs",
     "station-tracks:clean": "node scripts/clean_station_tracks.mjs"
   },

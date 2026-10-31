@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Amtracker Map</title>
-    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link id="favicon" rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
     <link rel="stylesheet" href="src/app.css" />
     <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
@@ -16,7 +16,7 @@
     <aside id="panel">
       <header>
         <div class="brand">
-          <span class="logo" aria-hidden="true"></span>
+          <canvas class="logo" width="16" height="16" aria-hidden="true"></canvas>
           <div>
             <h1>Amtracker</h1>
             <p id="status">Loading…</p>

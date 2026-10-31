@@ -4,7 +4,10 @@ Run on a schedule (see .github/workflows/speed-heatmap.yml). Each run adds one s
 train whose position fix is new since the last run, so a slow schedule never double-counts.
 
 Usage: python3 scripts/speed/collect.py DATA_DIR
-DATA_DIR holds daily/YYYY-MM-DD.json ({segment: [mph_sum, samples]}) and state.json.
+DATA_DIR holds daily/YYYY-MM-DD.json and state.json. Daily totals are keyed
+"<segment>@<period>" -> [mph_sum, samples], where period is the 4-hour slice of the day
+(0 = midnight-4am ... 5 = 8pm-midnight) on the train's own local clock. Older files keyed by
+bare segment count toward the all-day average only.
 """
 
 import json
@@ -18,6 +21,7 @@ from segments import Segments
 API = "https://api-v3.amtraker.com/v3/trains"
 MIN_MPH = 2  # stopped trains (station dwell, holds) would drag every average toward zero
 KEEP_DAYS = 35
+PERIOD_HOURS = 4
 
 
 def main():
@@ -47,7 +51,12 @@ def main():
         key = segments.locate(t["trainNum"], t["lon"], t["lat"])
         if not key:
             continue
-        total = day.setdefault(key, [0.0, 0])
+        # The fix carries the train's local UTC offset, so its hour is local time of day.
+        try:
+            period = datetime.fromisoformat(fix).hour // PERIOD_HOURS
+        except ValueError:
+            continue
+        total = day.setdefault(f"{key}@{period}", [0.0, 0])
         total[0] = round(total[0] + mph, 2)
         total[1] += 1
         added += 1
@@ -60,7 +69,7 @@ def main():
         if old.stem < cutoff:
             old.unlink()
 
-    print(f"{added} samples added from {len(trains)} trains -> {day_path.name} ({len(day)} segments)")
+    print(f"{added} samples added from {len(trains)} trains -> {day_path.name} ({len(day)} segment periods)")
 
 
 if __name__ == "__main__":
