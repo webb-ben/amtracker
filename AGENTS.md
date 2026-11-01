@@ -13,7 +13,8 @@ on the code.
 - `src/motion.js` – dead reckoning: `planMotion` snaps a train to its track and
   `positionAt(plan, now, behind)` extrapolates it (a negative `behind` is ahead of the nose).
 - `src/sprites.js` – pixel-art vehicles as character grids plus a palette; `sprites.html` previews them.
-- `src/icon.js` – header logo and animated favicon. `npm run icons` rewrites `favicon.svg` from it.
+- `src/icon.js` – header logo and animated favicon. `npm run icons` rewrites `favicon.svg` and the
+  home-screen PNGs (`apple-touch-icon.png`, `icon-192.png`, `icon-512.png`) from it.
 - `src/style.js` – the basemap style (Overture PMTiles; `OVERTURE_RELEASE` pins the release).
 - `data/` – prebuilt GTFS routes, train → shape map and station tracks; rebuilt by `scripts/`.
 - `scripts/speed/` – the speed-heatmap collector, run by `.github/workflows/speed-heatmap.yml`,

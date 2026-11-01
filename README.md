@@ -59,7 +59,7 @@ python3 scripts/speed/build.py /tmp/speed data/speed-segments.geojson
 ## Deploy
 
 Pushes to `main` publish the site to GitHub Pages via `.github/workflows/pages.yml`
-(it copies `index.html`, `sprites.html`, `src/` and `data/`; there is no build step).
+(it copies `index.html`, `sprites.html`, the icons and web manifest, `src/` and `data/`; there is no build step).
 
 ## Station tracks
 
