@@ -1,6 +1,6 @@
 import { buildStyle } from "./style.js";
 import { buildSprites, buildArrow, buildSpeedLoco, buildBlocks, digitPixels, spriteImageData, SCALE, VEHICLE, NARROW_WIDTH, LOCO_NUMBER, NUMBER_DEPTH, LOCO_NAMES } from "./sprites.js";
-import { planMotion, positionAt, trailAt, hasArrived, travelledAt, metersAheadTo, sliceTrack } from "./motion.js";
+import { planMotion, easeFrom, positionAt, trailAt, hasArrived, travelledAt, metersAheadTo, sliceTrack } from "./motion.js";
 import { animateIcon } from "./icon.js";
 
 const API = "https://api-v3.amtraker.com/v3";
@@ -630,8 +630,11 @@ function shapeFor(t) {
 // Within a major station, the station's main track (see stationSpines) takes priority over the
 // train's GTFS route shape, so every train there runs along the same straight line and the
 // lanes stack them neatly side by side instead of each following a different shape.
+// Each new plan eases in from the last one (see easeFrom), so a fresh fix never teleports a train.
 function buildPlans() {
-  state.plans = new Map(state.trains.map((t) => [t.trainID, planFor(t)]));
+  const now = Date.now();
+  const prev = state.plans;
+  state.plans = new Map(state.trains.map((t) => [t.trainID, easeFrom(planFor(t), prev?.get(t.trainID), now)]));
 }
 
 function planFor(t) {

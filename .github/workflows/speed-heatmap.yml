@@ -10,7 +10,8 @@ on:
     branches: [main]
   schedule:
     # Off the round minutes, which GitHub's scheduler is most likely to delay or drop.
-    - cron: "15,45 * * * *"
+    - cron: "*/15 * * * *"
+      timezone: "America/New_York"
   workflow_dispatch:
 
 permissions:

@@ -9,6 +9,15 @@ const MAX_TRACK_S = 20 * 60; // never extrapolate a stale fix further than this
 const MAX_FREE_S = 10 * 60; // off-track trains get less rope
 const MAX_OFF_TRACK_M = 2000;
 
+// When a fresh fix disagrees with where the train is drawn, the drawn train speeds up or slows
+// down until it's back on its fix rather than jumping there.
+const CATCHUP_S = 30; // spread a correction over about this long
+const CATCHUP_MAX_S = 120; // ...but never take longer than this
+const CATCHUP_KEEP_SPEED = 0.25; // a train slowing for its fix keeps at least this share of its speed
+const CATCHUP_SNAP_M = 5000; // corrections bigger than this aren't worth animating
+const SHIFT_MAX_M = 1000; // off its own track (new shape, direction or station track) this is the limit
+const SHIFT_MPS = 30; // how fast such a sideways correction slides
+
 const cache = new WeakMap(); // coords array -> cumulative distance along it
 
 function cumulative(coords) {
@@ -107,13 +116,67 @@ export function planMotion(train, coords, nextStop, compass) {
   return { kind: "track", coords, cum, along0: here.along, dir, limit, holdsAtStop, speed, t0 };
 }
 
+// Where dead reckoning puts the nose along the track, ignoring any catch-up.
+function reckonedAlong(plan, now) {
+  const s = Math.min(Math.max(0, (now - plan.t0) / 1000), MAX_TRACK_S);
+  const along = plan.along0 + plan.dir * plan.speed * s;
+  return plan.dir > 0 ? Math.min(along, plan.limit) : Math.max(along, plan.limit);
+}
+
+// Meters the drawn train still trails its fix along the track (negative when it's ahead of it).
+function lagAt(plan, now) {
+  const c = plan.catchup;
+  if (c?.kind !== "along") return 0;
+  const left = Math.max(0, Math.abs(c.gap) - c.rate * Math.max(0, (now - c.t) / 1000));
+  return Math.sign(c.gap) * left;
+}
+
+// Where the nose is drawn along the track.
+function shownAlong(plan, now) {
+  return reckonedAlong(plan, now) - plan.dir * lagAt(plan, now);
+}
+
+// The sideways {lon, lat} correction still to slide off, for a fix that moved the train off the track it was drawn on.
+function shiftAt(plan, now) {
+  const c = plan.catchup;
+  if (c?.kind !== "shift") return null;
+  const f = 1 - (now - c.t) / c.ms;
+  return f > 0 ? { lon: c.lon * f, lat: c.lat * f } : null;
+}
+
+/**
+ * Ease `plan` (built from a fresh fix) in from `prev` (the plan the train was drawn with): rather
+ * than jumping to the new fix, the drawn train runs faster or slower until it's caught up.
+ */
+export function easeFrom(plan, prev, now) {
+  if (!prev) return plan;
+  if (plan.kind === "track" && prev.kind === "track" && plan.coords === prev.coords && plan.dir === prev.dir && !shiftAt(prev, now)) {
+    const gap = plan.dir * (reckonedAlong(plan, now) - shownAlong(prev, now)); // positive: drawn behind the fix
+    if (Math.abs(gap) < 1 || Math.abs(gap) > CATCHUP_SNAP_M) return plan;
+    let rate = Math.abs(gap) / CATCHUP_S;
+    // Slowing down: don't stop dead or roll backwards unless the train itself has stopped short.
+    if (gap < 0) rate = Math.max(Math.min(rate, plan.speed * (1 - CATCHUP_KEEP_SPEED)), Math.abs(gap) / CATCHUP_MAX_S);
+    // A refresh that lands mid-correction keeps the pace it had, so corrections don't drag on.
+    const was = prev.catchup;
+    if (was?.kind === "along" && Math.sign(was.gap) === Math.sign(gap)) rate = Math.max(rate, was.rate);
+    plan.catchup = { kind: "along", gap, rate, t: now };
+    return plan;
+  }
+  // A different line, direction or kind of plan: slide the whole train across instead.
+  const from = positionAt(prev, now);
+  const to = positionAt(plan, now);
+  const kx = Math.cos((to.lat * Math.PI) / 180) * M_PER_DEG_LON;
+  const d = Math.hypot((from.lon - to.lon) * kx, (from.lat - to.lat) * M_PER_DEG_LAT);
+  if (d < 1 || d > SHIFT_MAX_M) return plan;
+  plan.catchup = { kind: "shift", lon: from.lon - to.lon, lat: from.lat - to.lat, t: now, ms: (Math.min(CATCHUP_S, d / SHIFT_MPS) * 1000) || 1 };
+  return plan;
+}
+
 /** How far (meters) the train's nose has travelled along its path since the plan's fix. */
 export function travelledAt(plan, now) {
   if (!plan) return 0;
   if (plan.kind === "free") return plan.speed * Math.min(Math.max(0, (now - plan.t0) / 1000), MAX_FREE_S);
-  const s = Math.min(Math.max(0, (now - plan.t0) / 1000), MAX_TRACK_S);
-  const along = plan.along0 + plan.dir * plan.speed * s;
-  return Math.abs((plan.dir > 0 ? Math.min(along, plan.limit) : Math.max(along, plan.limit)) - plan.along0);
+  return Math.abs(shownAlong(plan, now) - plan.along0);
 }
 
 /** True once dead reckoning has carried a moving train up to its next stop, where it holds. */
@@ -148,11 +211,17 @@ export function metersAheadTo(plan, now, point) {
   if (plan?.kind !== "track") return null;
   const at = project(plan.coords, plan.cum, point.lon, point.lat);
   if (at.off > MAX_OFF_TRACK_M) return null;
-  return plan.dir * (at.along - plan.along0) - travelledAt(plan, now);
+  return plan.dir * (at.along - shownAlong(plan, now));
 }
 
 /** Extrapolated {lon, lat, bearing} for a plan at time `now` (ms), `behind` meters back along the track. */
 export function positionAt(plan, now, behind = 0) {
+  const p = reckonedPositionAt(plan, now, behind);
+  const shift = shiftAt(plan, now);
+  return shift ? { ...p, lon: p.lon + shift.lon, lat: p.lat + shift.lat } : p;
+}
+
+function reckonedPositionAt(plan, now, behind) {
   if (plan.kind === "free") {
     const s = Math.min(Math.max(0, (now - plan.t0) / 1000), MAX_FREE_S);
     const d = plan.speed * s - behind;
@@ -160,10 +229,7 @@ export function positionAt(plan, now, behind = 0) {
     const kx = Math.cos((plan.lat * Math.PI) / 180) * M_PER_DEG_LON;
     return { lon: plan.lon + (d * Math.sin(rad)) / kx, lat: plan.lat + (d * Math.cos(rad)) / M_PER_DEG_LAT, bearing: plan.bearing };
   }
-  const s = Math.min(Math.max(0, (now - plan.t0) / 1000), MAX_TRACK_S);
-  let along = plan.along0 + plan.dir * plan.speed * s;
-  along = plan.dir > 0 ? Math.min(along, plan.limit) : Math.max(along, plan.limit);
-  const p = extendedPointAt(plan.coords, plan.cum, along - plan.dir * behind);
+  const p = extendedPointAt(plan.coords, plan.cum, shownAlong(plan, now) - plan.dir * behind);
   return { lon: p.lon, lat: p.lat, bearing: plan.dir > 0 ? p.bearing : (p.bearing + 180) % 360 };
 }
 
@@ -195,9 +261,7 @@ export function trailAt(plan, now, meters) {
       [head.lon, head.lat],
     ];
   }
-  const s = Math.min(Math.max(0, (now - plan.t0) / 1000), MAX_TRACK_S);
-  let along = plan.along0 + plan.dir * plan.speed * s;
-  along = plan.dir > 0 ? Math.min(along, plan.limit) : Math.max(along, plan.limit);
+  const along = shownAlong(plan, now);
   const end = plan.cum[plan.cum.length - 1];
   const tail = Math.max(0, Math.min(end, along - plan.dir * meters));
   const [lo, hi] = tail < along ? [tail, along] : [along, tail];
@@ -205,6 +269,7 @@ export function trailAt(plan, now, meters) {
   const line = [pointAt(...coords, lo)];
   for (let i = 0; i < plan.cum.length; i++) if (plan.cum[i] > lo && plan.cum[i] < hi) line.push({ lon: plan.coords[i][0], lat: plan.coords[i][1] });
   line.push(pointAt(...coords, hi));
-  const out = line.map((p) => [p.lon, p.lat]);
+  const shift = shiftAt(plan, now) ?? { lon: 0, lat: 0 };
+  const out = line.map((p) => [p.lon + shift.lon, p.lat + shift.lat]);
   return plan.dir > 0 ? out : out.reverse();
 }
