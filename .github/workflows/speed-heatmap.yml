@@ -13,6 +13,8 @@ on:
     # Off the round minutes, which GitHub's scheduler is most likely to delay or drop.
     - cron: "7,22,37,52 * * * *"
       timezone: "America/New_York"
+    - cron: "*/30 */1 * * *"
+      timezone: "America/New_York"
   workflow_dispatch:
 
 permissions:
